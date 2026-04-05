@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  FFMPEG_VERSION: "7.1"
+  FFMPEG_CACHE_V: "1"
+
+jobs:
+  build-ffmpeg:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: darwin-arm64
+            ffmpeg_extra: "--enable-videotoolbox --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox --enable-encoder=h264_videotoolbox,hevc_videotoolbox"
+          - os: macos-15-intel
+            platform: darwin-x64
+            ffmpeg_extra: "--enable-videotoolbox --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox --enable-encoder=h264_videotoolbox,hevc_videotoolbox"
+          - os: ubuntu-22.04
+            platform: linux-x64
+            ffmpeg_extra: ""
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Cache FFmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          key: ffmpeg-${{ matrix.platform }}-${{ env.FFMPEG_VERSION }}-v${{ env.FFMPEG_CACHE_V }}
+          path: ${{ runner.temp }}/ffmpeg-prefix
+
+      - name: Install build deps (macOS)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'macOS'
+        run: brew install nasm x264 x265
+
+      - name: Install build deps (Linux)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm zlib1g-dev cmake
+
+      - name: Build static x264 (Linux)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          mkdir -p "$PREFIX"
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264-src
+          cd /tmp/x264-src
+          ./configure --prefix="$PREFIX" --enable-static --disable-shared --enable-pic --disable-cli
+          make -j$(nproc) && make install
+
+      - name: Build static x265 (Linux)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          git clone --depth 1 -b 4.1 https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
+          cd /tmp/x265-src/build/linux
+          cmake ../../source \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DENABLE_SHARED=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_CLI=OFF
+          make -j$(nproc) && make install
+
+      - name: Build FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          mkdir -p "$PREFIX"
+          git clone --depth 1 --branch n${{ env.FFMPEG_VERSION }} https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg-src
+          cd /tmp/ffmpeg-src
+
+          EXTRA_CFLAGS="-I$PREFIX/include"
+          EXTRA_LDFLAGS="-L$PREFIX/lib"
+
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            BREW_PREFIX="$(brew --prefix)"
+            EXTRA_CFLAGS="$EXTRA_CFLAGS -I$BREW_PREFIX/include -I$BREW_PREFIX/opt/x264/include -I$BREW_PREFIX/opt/x265/include"
+            EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$BREW_PREFIX/lib -L$BREW_PREFIX/opt/x264/lib -L$BREW_PREFIX/opt/x265/lib"
+          fi
+
+          _PKG="$PREFIX/lib/pkgconfig"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            _PKG="$_PKG:$BREW_PREFIX/lib/pkgconfig:$BREW_PREFIX/opt/x264/lib/pkgconfig:$BREW_PREFIX/opt/x265/lib/pkgconfig"
+          fi
+
+          PKG_CONFIG_PATH="$_PKG" \
+          ./configure \
+            --prefix="$PREFIX" \
+            --enable-static --disable-shared --enable-pic \
+            --disable-autodetect --disable-programs --disable-doc --disable-network \
+            --disable-everything \
+            --pkg-config-flags="--static" \
+            --enable-avcodec --enable-avformat --enable-avfilter \
+            --enable-swscale --enable-swresample \
+            --enable-gpl --enable-zlib --enable-libx264 --enable-libx265 \
+            --enable-decoder=h264,hevc,vp8,vp9,rawvideo,png,pcm_s16le,aac,pcm_f32le \
+            --enable-encoder=libx264,libx265,rawvideo,png,aac \
+            --enable-parser=h264,hevc,vp8,vp9,aac \
+            --enable-demuxer=mov,matroska,rawvideo,image2,wav,aac \
+            --enable-muxer=mp4,mov,image2,null \
+            --enable-filter=overlay,scale,crop,color,format,pad,alphamerge,null,anull,aformat,setpts,asetpts,fps,trim,atrim,split,asplit,buffer,buffersink,abuffer,abuffersink \
+            --enable-protocol=file,pipe \
+            --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
+            --enable-small \
+            --extra-cflags="$EXTRA_CFLAGS" \
+            --extra-ldflags="$EXTRA_LDFLAGS" \
+            ${{ matrix.ffmpeg_extra }}
+
+          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+          make install
+
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp "$BREW_PREFIX/opt/x264/lib/libx264.a" "$PREFIX/lib/" 2>/dev/null || true
+            cp "$BREW_PREFIX/opt/x265/lib/libx265.a" "$PREFIX/lib/" 2>/dev/null || true
+          fi
+
+  build:
+    needs: build-ffmpeg
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Restore FFmpeg cache
+        uses: actions/cache/restore@v4
+        with:
+          key: ffmpeg-${{ matrix.platform }}-${{ env.FFMPEG_VERSION }}-v${{ env.FFMPEG_CACHE_V }}
+          path: ${{ runner.temp }}/ffmpeg-prefix
+          fail-on-cache-miss: true
+
+      - name: Set FFmpeg env vars
+        shell: bash
+        run: |
+          echo "FFMPEG_DIR=${{ runner.temp }}/ffmpeg-prefix" >> "$GITHUB_ENV"
+          echo "FFMPEG_DEPS_DIR=${{ runner.temp }}/ffmpeg-prefix" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${{ runner.temp }}/ffmpeg-prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Install pkg-config (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config zlib1g-dev
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Test
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/kineto dist/
+          cd dist && tar -czf ../kineto-${{ matrix.platform }}.tar.gz *
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kineto-${{ matrix.platform }}
+          path: kineto-${{ matrix.platform }}.tar.gz
+
+  release:
+    needs: build
+    if: always() && needs.build.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            kineto-darwin-arm64/kineto-darwin-arm64.tar.gz
+            kineto-darwin-x64/kineto-darwin-x64.tar.gz
+            kineto-linux-x64/kineto-linux-x64.tar.gz
+          fail_on_unmatched_files: false
+          generate_release_notes: true

@@ -1,0 +1,19 @@
+[package]
+name = "kineto-engine"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Cross-platform cinematic video composition — background, rounded corners, shadow, zoom with easing"
+repository = "https://github.com/onevarez/kineto-engine"
+
+[[bin]]
+name = "kineto"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tempfile = "3"
+ffmpeg-the-third = { version = "3", features = ["static"] }
