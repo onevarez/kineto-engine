@@ -1,0 +1,289 @@
+name: Performance Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FFMPEG_VERSION: "7.1"
+  FFMPEG_CACHE_V: "1"
+  HYPERFINE_VERSION: "1.18.0"
+  # All test videos are 10 s at 60 fps = 600 frames
+  FIXTURE_FRAMES: "600"
+
+permissions:
+  contents: write   # needed to push to bench-data branch
+
+jobs:
+  benchmark:
+    name: Export Pipeline Benchmarks
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # ── FFmpeg (reuses cache from release.yml when available) ─────────────
+
+      - name: Cache FFmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          key: ffmpeg-linux-x64-${{ env.FFMPEG_VERSION }}-v${{ env.FFMPEG_CACHE_V }}
+          path: ${{ runner.temp }}/ffmpeg-prefix
+
+      - name: Install FFmpeg build deps
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm zlib1g-dev cmake
+
+      - name: Build static x264
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          mkdir -p "$PREFIX"
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264-src
+          cd /tmp/x264-src
+          ./configure --prefix="$PREFIX" --enable-static --disable-shared \
+            --enable-pic --disable-cli
+          make -j$(nproc) && make install
+
+      - name: Build static x265
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          git clone --depth 1 -b 4.1 \
+            https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
+          cd /tmp/x265-src/build/linux
+          cmake ../../source \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DENABLE_SHARED=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_CLI=OFF
+          make -j$(nproc) && make install
+
+      - name: Build FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          git clone --depth 1 --branch n${{ env.FFMPEG_VERSION }} \
+            https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg-src
+          cd /tmp/ffmpeg-src
+          PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
+          ./configure \
+            --prefix="$PREFIX" \
+            --enable-static --disable-shared --enable-pic \
+            --disable-autodetect --disable-programs --disable-doc --disable-network \
+            --disable-everything \
+            --pkg-config-flags="--static" \
+            --enable-avcodec --enable-avformat --enable-avfilter \
+            --enable-swscale --enable-swresample \
+            --enable-gpl --enable-zlib --enable-libx264 --enable-libx265 \
+            --enable-decoder=h264,hevc,vp8,vp9,rawvideo,png,pcm_s16le,aac,pcm_f32le \
+            --enable-encoder=libx264,libx265,rawvideo,png,aac \
+            --enable-parser=h264,hevc,vp8,vp9,aac \
+            --enable-demuxer=mov,matroska,rawvideo,image2,wav,aac \
+            --enable-muxer=mp4,mov,image2,null \
+            --enable-filter=overlay,scale,crop,color,format,pad,alphamerge,null,anull,aformat,setpts,asetpts,fps,trim,atrim,split,asplit,buffer,buffersink,abuffer,abuffersink \
+            --enable-protocol=file,pipe \
+            --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
+            --enable-small \
+            --extra-cflags="-I$PREFIX/include" \
+            --extra-ldflags="-L$PREFIX/lib"
+          make -j$(nproc)
+          make install
+
+      # ── Build ──────────────────────────────────────────────────────────────
+
+      - name: Set FFmpeg env vars
+        run: |
+          echo "FFMPEG_DIR=${{ runner.temp }}/ffmpeg-prefix"         >> "$GITHUB_ENV"
+          echo "FFMPEG_DEPS_DIR=${{ runner.temp }}/ffmpeg-prefix"    >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${{ runner.temp }}/ffmpeg-prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config zlib1g-dev
+
+      - name: Build kineto
+        run: cargo build --release
+
+      # ── Test videos (cached) ───────────────────────────────────────────────
+
+      - name: Cache test videos
+        id: cache-videos
+        uses: actions/cache@v4
+        with:
+          key: test-videos-bbb-30mb-v1
+          path: fixtures/videos/
+
+      - name: Download Big Buck Bunny test videos
+        if: steps.cache-videos.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p fixtures/videos
+          BASE="https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264"
+          curl -fL "$BASE/360/Big_Buck_Bunny_360_10s_30MB.mp4"  -o fixtures/videos/bbb_360p.mp4
+          curl -fL "$BASE/720/Big_Buck_Bunny_720_10s_30MB.mp4"  -o fixtures/videos/bbb_720p.mp4
+          curl -fL "$BASE/1080/Big_Buck_Bunny_1080_10s_30MB.mp4" -o fixtures/videos/bbb_1080p.mp4
+
+      # ── Benchmarks ─────────────────────────────────────────────────────────
+
+      - name: Install hyperfine
+        run: |
+          curl -sSL \
+            "https://github.com/sharkdp/hyperfine/releases/download/v${{ env.HYPERFINE_VERSION }}/hyperfine_${{ env.HYPERFINE_VERSION }}_amd64.deb" \
+            -o /tmp/hyperfine.deb
+          sudo dpkg -i /tmp/hyperfine.deb
+
+      - name: Run timing benchmarks
+        run: |
+          BIN=./target/release/kineto
+          OUT=/tmp/bench_timing && mkdir -p "$OUT"
+          ZOOM=.github/fixtures/zoom_4clicks.json
+
+          # 3 resolutions × 4 scenarios = 12 commands
+          # --warmup 1 keeps the OS page cache warm before timed runs
+          hyperfine \
+            --runs 3 --warmup 1 \
+            --export-json bench-results.json \
+            \
+            --command-name "360p-plain" \
+              "$BIN export -i fixtures/videos/bbb_360p.mp4   -o $OUT/360p-plain.mp4  --codec h264" \
+            --command-name "360p-shadow" \
+              "$BIN export -i fixtures/videos/bbb_360p.mp4   -o $OUT/360p-shadow.mp4 --codec h264 --shadow" \
+            --command-name "360p-zoom" \
+              "$BIN export -i fixtures/videos/bbb_360p.mp4   -o $OUT/360p-zoom.mp4   --codec h264 --zoom-segments-file $ZOOM" \
+            --command-name "360p-full" \
+              "$BIN export -i fixtures/videos/bbb_360p.mp4   -o $OUT/360p-full.mp4   --codec h264 --shadow --zoom-segments-file $ZOOM --motion-blur 0.5" \
+            \
+            --command-name "720p-plain" \
+              "$BIN export -i fixtures/videos/bbb_720p.mp4   -o $OUT/720p-plain.mp4  --codec h264" \
+            --command-name "720p-shadow" \
+              "$BIN export -i fixtures/videos/bbb_720p.mp4   -o $OUT/720p-shadow.mp4 --codec h264 --shadow" \
+            --command-name "720p-zoom" \
+              "$BIN export -i fixtures/videos/bbb_720p.mp4   -o $OUT/720p-zoom.mp4   --codec h264 --zoom-segments-file $ZOOM" \
+            --command-name "720p-full" \
+              "$BIN export -i fixtures/videos/bbb_720p.mp4   -o $OUT/720p-full.mp4   --codec h264 --shadow --zoom-segments-file $ZOOM --motion-blur 0.5" \
+            \
+            --command-name "1080p-plain" \
+              "$BIN export -i fixtures/videos/bbb_1080p.mp4  -o $OUT/1080p-plain.mp4  --codec h264" \
+            --command-name "1080p-shadow" \
+              "$BIN export -i fixtures/videos/bbb_1080p.mp4  -o $OUT/1080p-shadow.mp4 --codec h264 --shadow" \
+            --command-name "1080p-zoom" \
+              "$BIN export -i fixtures/videos/bbb_1080p.mp4  -o $OUT/1080p-zoom.mp4   --codec h264 --zoom-segments-file $ZOOM" \
+            --command-name "1080p-full" \
+              "$BIN export -i fixtures/videos/bbb_1080p.mp4  -o $OUT/1080p-full.mp4   --codec h264 --shadow --zoom-segments-file $ZOOM --motion-blur 0.5"
+
+      - name: Measure peak memory
+        run: |
+          BIN=./target/release/kineto
+          OUT=/tmp/bench_mem && mkdir -p "$OUT"
+          ZOOM=.github/fixtures/zoom_4clicks.json
+
+          mem() {
+            # Runs one export and extracts peak RSS in KB from /usr/bin/time -v
+            local name="$1"; shift
+            local rss
+            rss=$(/usr/bin/time -v "$BIN" export "$@" 2>&1 \
+                  | awk '/Maximum resident/{print $NF}')
+            echo "${name}=${rss}"
+          }
+
+          {
+            mem 360p-plain  -i fixtures/videos/bbb_360p.mp4  -o "$OUT/360p-plain.mp4"  --codec h264
+            mem 360p-shadow -i fixtures/videos/bbb_360p.mp4  -o "$OUT/360p-shadow.mp4" --codec h264 --shadow
+            mem 360p-zoom   -i fixtures/videos/bbb_360p.mp4  -o "$OUT/360p-zoom.mp4"   --codec h264 --zoom-segments-file "$ZOOM"
+            mem 360p-full   -i fixtures/videos/bbb_360p.mp4  -o "$OUT/360p-full.mp4"   --codec h264 --shadow --zoom-segments-file "$ZOOM" --motion-blur 0.5
+            mem 720p-plain  -i fixtures/videos/bbb_720p.mp4  -o "$OUT/720p-plain.mp4"  --codec h264
+            mem 720p-shadow -i fixtures/videos/bbb_720p.mp4  -o "$OUT/720p-shadow.mp4" --codec h264 --shadow
+            mem 720p-zoom   -i fixtures/videos/bbb_720p.mp4  -o "$OUT/720p-zoom.mp4"   --codec h264 --zoom-segments-file "$ZOOM"
+            mem 720p-full   -i fixtures/videos/bbb_720p.mp4  -o "$OUT/720p-full.mp4"   --codec h264 --shadow --zoom-segments-file "$ZOOM" --motion-blur 0.5
+            mem 1080p-plain  -i fixtures/videos/bbb_1080p.mp4 -o "$OUT/1080p-plain.mp4"  --codec h264
+            mem 1080p-shadow -i fixtures/videos/bbb_1080p.mp4 -o "$OUT/1080p-shadow.mp4" --codec h264 --shadow
+            mem 1080p-zoom   -i fixtures/videos/bbb_1080p.mp4 -o "$OUT/1080p-zoom.mp4"   --codec h264 --zoom-segments-file "$ZOOM"
+            mem 1080p-full   -i fixtures/videos/bbb_1080p.mp4 -o "$OUT/1080p-full.mp4"   --codec h264 --shadow --zoom-segments-file "$ZOOM" --motion-blur 0.5
+          } > mem.env
+
+      - name: Collect metadata
+        run: |
+          {
+            echo "binary_size=$(stat -c%s ./target/release/kineto)"
+            echo "git_sha=${{ github.sha }}"
+            echo "branch=${{ github.ref_name }}"
+            echo "run_id=${{ github.run_id }}"
+            echo "run_url=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "platform=linux-x64"
+            echo "fixture_frames=${{ env.FIXTURE_FRAMES }}"
+          } > bench-meta.env
+
+      # ── History tracking ───────────────────────────────────────────────────
+
+      - name: Fetch bench-data history
+        id: fetch-history
+        run: |
+          REPO_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          if git clone --depth 50 --branch bench-data "$REPO_URL" /tmp/bench-data 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            mkdir /tmp/bench-data
+            echo '{"runs":[]}' > /tmp/bench-data/history.json
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Append run to history
+        run: |
+          python3 .github/scripts/bench_summary.py append \
+            --results     bench-results.json \
+            --memory      mem.env \
+            --meta        bench-meta.env \
+            --history     /tmp/bench-data/history.json
+
+      - name: Push history to bench-data branch
+        # Only persist history for commits that land on main (not PRs)
+        if: github.event_name != 'pull_request'
+        run: |
+          REPO_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          cd /tmp/bench-data
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ "${{ steps.fetch-history.outputs.exists }}" = "false" ]; then
+            git init
+            git remote add origin "$REPO_URL"
+            git checkout --orphan bench-data
+          fi
+
+          git add history.json
+          git commit -m "bench: ${{ github.sha }}" || true
+
+          # Retry once on concurrent push conflicts
+          git push origin HEAD:bench-data || (git pull --rebase origin bench-data && git push origin HEAD:bench-data)
+
+      # ── Publish ────────────────────────────────────────────────────────────
+
+      - name: Publish job summary
+        run: |
+          python3 .github/scripts/bench_summary.py report \
+            --results  bench-results.json \
+            --memory   mem.env \
+            --meta     bench-meta.env \
+            --history  /tmp/bench-data/history.json \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-linux-x64-${{ github.sha }}
+          path: |
+            bench-results.json
+            mem.env
+            bench-meta.env
+          retention-days: 90

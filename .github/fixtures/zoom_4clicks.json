@@ -1,0 +1,38 @@
+[
+  {
+    "start_time": 1.0,
+    "end_time": 2.5,
+    "zoom_level": 2.0,
+    "center_x": 0.28,
+    "center_y": 0.32,
+    "easing": "cinematic",
+    "hold_duration_secs": 1.0
+  },
+  {
+    "start_time": 3.5,
+    "end_time": 5.0,
+    "zoom_level": 2.4,
+    "center_x": 0.72,
+    "center_y": 0.38,
+    "easing": "smooth",
+    "hold_duration_secs": 1.2
+  },
+  {
+    "start_time": 5.8,
+    "end_time": 7.3,
+    "zoom_level": 1.9,
+    "center_x": 0.45,
+    "center_y": 0.68,
+    "easing": "snappy",
+    "hold_duration_secs": 0.9
+  },
+  {
+    "start_time": 8.0,
+    "end_time": 9.5,
+    "zoom_level": 2.2,
+    "center_x": 0.65,
+    "center_y": 0.55,
+    "easing": "cinematic",
+    "hold_duration_secs": 0.8
+  }
+]
