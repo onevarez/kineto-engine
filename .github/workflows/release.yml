@@ -7,7 +7,7 @@ on:
 
 env:
   FFMPEG_VERSION: "7.1"
-  FFMPEG_CACHE_V: "1"
+  FFMPEG_CACHE_V: "2"
 
 jobs:
   build-ffmpeg:
@@ -24,6 +24,9 @@ jobs:
           - os: ubuntu-22.04
             platform: linux-x64
             ffmpeg_extra: ""
+          - os: ubuntu-22.04
+            platform: windows-x64
+            ffmpeg_extra: ""
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -38,14 +41,27 @@ jobs:
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'macOS'
         run: brew install nasm x264 x265
 
-      - name: Install build deps (Linux)
-        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+      - name: Install build deps (Linux native)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'linux-x64'
         run: |
           sudo apt-get update
           sudo apt-get install -y nasm zlib1g-dev cmake
 
+      - name: Install cross-compilation toolchain (Windows)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'windows-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64 \
+            nasm \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libz-mingw-w64-dev
+
       - name: Build static x264 (Linux)
-        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'linux-x64'
         run: |
           PREFIX="${{ runner.temp }}/ffmpeg-prefix"
           mkdir -p "$PREFIX"
@@ -55,7 +71,7 @@ jobs:
           make -j$(nproc) && make install
 
       - name: Build static x265 (Linux)
-        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'linux-x64'
         run: |
           PREFIX="${{ runner.temp }}/ffmpeg-prefix"
           git clone --depth 1 -b 4.1 https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
@@ -67,8 +83,39 @@ jobs:
             -DENABLE_CLI=OFF
           make -j$(nproc) && make install
 
-      - name: Build FFmpeg
-        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+      - name: Build static x264 (Windows cross)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'windows-x64'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          mkdir -p "$PREFIX"
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264-src
+          cd /tmp/x264-src
+          CC=x86_64-w64-mingw32-gcc-posix \
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --prefix="$PREFIX" \
+            --enable-static --disable-shared --disable-cli
+          make -j$(nproc) && make install
+
+      - name: Build static x265 (Windows cross)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'windows-x64'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          git clone --depth 1 -b 4.1 https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
+          cmake /tmp/x265-src/source \
+            -G Ninja \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF
+          ninja && ninja install
+          sed -i 's/-lx265/-lx265 -lstdc++/' "$PREFIX/lib/pkgconfig/x265.pc"
+
+      - name: Build FFmpeg (POSIX)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform != 'windows-x64'
         run: |
           PREFIX="${{ runner.temp }}/ffmpeg-prefix"
           mkdir -p "$PREFIX"
@@ -120,6 +167,45 @@ jobs:
             cp "$BREW_PREFIX/opt/x265/lib/libx265.a" "$PREFIX/lib/" 2>/dev/null || true
           fi
 
+      - name: Build FFmpeg (Windows cross)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'windows-x64'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          git clone --depth 1 --branch n${{ env.FFMPEG_VERSION }} \
+            https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg-src
+          cd /tmp/ffmpeg-src
+          PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
+          PKG_CONFIG_ALLOW_CROSS=1 \
+          ./configure \
+            --prefix="$PREFIX" \
+            --enable-cross-compile \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --arch=x86_64 \
+            --target-os=mingw32 \
+            --pkg-config=pkg-config \
+            --cc=x86_64-w64-mingw32-gcc-posix \
+            --cxx=x86_64-w64-mingw32-g++-posix \
+            --pkg-config-flags="--static" \
+            --enable-static --disable-shared \
+            --disable-autodetect --disable-programs --disable-doc --disable-network \
+            --disable-everything \
+            --enable-avcodec --enable-avformat --enable-avfilter \
+            --enable-swscale --enable-swresample \
+            --enable-gpl --enable-zlib --enable-libx264 --enable-libx265 \
+            --enable-decoder=h264,hevc,vp8,vp9,rawvideo,png,pcm_s16le,aac,pcm_f32le \
+            --enable-encoder=libx264,libx265,rawvideo,png,aac \
+            --enable-parser=h264,hevc,vp8,vp9,aac \
+            --enable-demuxer=mov,matroska,rawvideo,image2,wav,aac \
+            --enable-muxer=mp4,mov,image2,null \
+            --enable-filter=overlay,scale,crop,color,format,pad,alphamerge,null,anull,aformat,setpts,asetpts,fps,trim,atrim,split,asplit,buffer,buffersink,abuffer,abuffersink \
+            --enable-protocol=file,pipe \
+            --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
+            --enable-small \
+            --extra-cflags="-I$PREFIX/include -I/usr/x86_64-w64-mingw32/include" \
+            --extra-ldflags="-L$PREFIX/lib -L/usr/x86_64-w64-mingw32/lib"
+          make -j$(nproc)
+          make install
+
   build:
     needs: build-ffmpeg
     strategy:
@@ -129,12 +215,23 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             platform: darwin-arm64
+            binary: kineto
+            archive: tar.gz
           - os: macos-15-intel
             target: x86_64-apple-darwin
             platform: darwin-x64
+            binary: kineto
+            archive: tar.gz
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             platform: linux-x64
+            binary: kineto
+            archive: tar.gz
+          - os: ubuntu-22.04
+            target: x86_64-pc-windows-gnu
+            platform: windows-x64
+            binary: kineto.exe
+            archive: zip
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -144,6 +241,21 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install cross-compilation toolchain (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64 \
+            libz-mingw-w64-dev \
+            pkg-config \
+            zip
+
+      - name: Install pkg-config (Linux)
+        if: matrix.platform == 'linux-x64'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config zlib1g-dev
+
       - name: Restore FFmpeg cache
         uses: actions/cache/restore@v4
         with:
@@ -151,33 +263,53 @@ jobs:
           path: ${{ runner.temp }}/ffmpeg-prefix
           fail-on-cache-miss: true
 
-      - name: Set FFmpeg env vars
+      - name: Set FFmpeg env vars (POSIX)
+        if: matrix.platform != 'windows-x64'
         shell: bash
         run: |
           echo "FFMPEG_DIR=${{ runner.temp }}/ffmpeg-prefix" >> "$GITHUB_ENV"
           echo "FFMPEG_DEPS_DIR=${{ runner.temp }}/ffmpeg-prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=${{ runner.temp }}/ffmpeg-prefix/lib/pkgconfig" >> "$GITHUB_ENV"
 
-      - name: Install pkg-config (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y pkg-config zlib1g-dev
+      - name: Set FFmpeg env vars (Windows cross)
+        if: matrix.platform == 'windows-x64'
+        shell: bash
+        run: |
+          echo "FFMPEG_DIR=${{ runner.temp }}/ffmpeg-prefix"                         >> "$GITHUB_ENV"
+          echo "FFMPEG_DEPS_DIR=${{ runner.temp }}/ffmpeg-prefix"                    >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${{ runner.temp }}/ffmpeg-prefix/lib/pkgconfig"      >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_CROSS=1"                                            >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc-posix" >> "$GITHUB_ENV"
 
       - name: Build
+        shell: bash
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Test
+        if: matrix.platform != 'windows-x64'
+        shell: bash
         run: cargo test --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (POSIX)
+        if: matrix.platform != 'windows-x64'
+        shell: bash
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/kineto dist/
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
           cd dist && tar -czf ../kineto-${{ matrix.platform }}.tar.gz *
+
+      - name: Package (Windows)
+        if: matrix.platform == 'windows-x64'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+          cd dist && zip ../kineto-${{ matrix.platform }}.zip *
 
       - uses: actions/upload-artifact@v4
         with:
           name: kineto-${{ matrix.platform }}
-          path: kineto-${{ matrix.platform }}.tar.gz
+          path: kineto-${{ matrix.platform }}.${{ matrix.archive }}
 
   release:
     needs: build
@@ -195,5 +327,6 @@ jobs:
             kineto-darwin-arm64/kineto-darwin-arm64.tar.gz
             kineto-darwin-x64/kineto-darwin-x64.tar.gz
             kineto-linux-x64/kineto-linux-x64.tar.gz
+            kineto-windows-x64/kineto-windows-x64.zip
           fail_on_unmatched_files: false
           generate_release_notes: true

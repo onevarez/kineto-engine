@@ -2,7 +2,7 @@
 
 Cinematic video composition from the command line. Takes a screen recording and produces a polished video with a colored background, padding, rounded corners, drop shadow, and smooth auto-zoom — all in a single binary with no runtime dependencies.
 
-Built on statically linked FFmpeg (libav*). Decodes H.264/VP8, composites in RGBA, encodes to H.264 via libx264.
+Built on statically linked FFmpeg (libav*). Decodes H.264/VP8/HEVC, composites in RGBA, encodes to H.264 or HEVC via libx264/libx265. Runs on macOS, Linux, and Windows — no runtime dependencies on any platform.
 
 ## Install
 
@@ -17,6 +17,12 @@ curl -sL https://github.com/onevarez/kineto-engine/releases/latest/download/kine
 
 # Linux (x64)
 curl -sL https://github.com/onevarez/kineto-engine/releases/latest/download/kineto-linux-x64.tar.gz | tar -xz
+```
+
+```powershell
+# Windows (x64) — PowerShell
+Invoke-WebRequest -Uri https://github.com/onevarez/kineto-engine/releases/latest/download/kineto-windows-x64.zip -OutFile kineto-windows-x64.zip
+Expand-Archive kineto-windows-x64.zip -DestinationPath .
 ```
 
 Or build from source:
@@ -147,6 +153,7 @@ The shadow is rendered at 1/4 resolution, blurred, and upscaled — fast even fo
 | macOS arm64 | `kineto-darwin-arm64.tar.gz` | Supported |
 | macOS x64 | `kineto-darwin-x64.tar.gz` | Supported |
 | Linux x64 | `kineto-linux-x64.tar.gz` | Supported |
+| Windows x64 | `kineto-windows-x64.zip` | Supported |
 
 ## License
 
