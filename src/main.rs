@@ -1,5 +1,7 @@
 mod assets;
 mod compose;
+mod cursor;
+mod motion_blur;
 mod zoom;
 
 use clap::{Parser, Subcommand};
@@ -111,6 +113,22 @@ pub struct ExportArgs {
     #[arg(long, default_value = "0.0")]
     pub motion_blur: f64,
 
+    /// Path to cursor telemetry JSON file
+    #[arg(long)]
+    pub cursor_file: Option<String>,
+
+    /// Path to custom cursor image (PNG). Defaults to built-in arrow.
+    #[arg(long)]
+    pub cursor_image: Option<String>,
+
+    /// Cursor physics preset: mellow, rapid, linear, cinematic
+    #[arg(long, default_value = "mellow")]
+    pub cursor_physics: String,
+
+    /// Cursor display mode: always, click
+    #[arg(long, default_value = "always")]
+    pub cursor_display: String,
+
     /// Path to JSON file containing zoom segments array
     #[arg(long)]
     pub zoom_segments_file: Option<String>,
@@ -118,6 +136,14 @@ pub struct ExportArgs {
     /// Zoom easing type: smooth, snappy, cinematic, spring
     #[arg(long, default_value = "smooth")]
     pub zoom_easing: String,
+
+    /// Zoom-in transition duration in seconds
+    #[arg(long, default_value = "1.0")]
+    pub zoom_in_duration: f64,
+
+    /// Zoom-out transition duration in seconds
+    #[arg(long, default_value = "0.7")]
+    pub zoom_out_duration: f64,
 
     // ── Audio mixing (accepted, not implemented) ──
 
@@ -135,9 +161,6 @@ impl ExportArgs {
     pub fn warn_unsupported(&self) {
         if self.webcam.is_some() {
             eprintln!("WARNING: --webcam is not yet supported by kineto, ignoring");
-        }
-        if self.motion_blur > 0.0 {
-            eprintln!("WARNING: --motion-blur is not yet supported by kineto, ignoring");
         }
         if !self.audio_track.is_empty() {
             eprintln!("WARNING: --audio-track is not yet supported by kineto, ignoring");
@@ -333,7 +356,9 @@ mod tests {
             webcam: None, webcam_pos: None,
             webcam_shape: "circle".into(), webcam_corner_radius: 16.0,
             motion_blur: 0.0,
+            cursor_file: None, cursor_image: None, cursor_physics: "mellow".into(), cursor_display: "always".into(),
             zoom_segments_file: None, zoom_easing: "smooth".into(),
+            zoom_in_duration: 1.0, zoom_out_duration: 0.7,
             audio_track: vec![], main_volume: 1.0,
         };
         let params = args.encoder_params();
