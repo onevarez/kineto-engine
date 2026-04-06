@@ -230,9 +230,8 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
         Vec::new()
     };
 
-    // ── Zoom scaler cache — rebuilt only when crop dimensions change ──
-    // Stores (crop_w, crop_h, cropped_frame, scaler)
-    let mut zoom_cache: Option<(u32, u32, ffmpeg::frame::Video, scaling::Context)> = None;
+    // ── Zoom output buffer — packed RGBA, canvas-sized ──
+    let mut zoom_buf: Vec<u8> = if has_zoom { vec![0u8; cw * ch * 4] } else { Vec::new() };
 
     let mut prev_transform: Option<motion_blur::CameraTransform> = None;
 
@@ -342,63 +341,26 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
 
             let zoomed = zoom_level > 1.01;
 
+            // Step 4: Zoom — direct Rayon-parallel bilinear blit from crop region
+            // of comp_buf into zoom_buf.  No intermediate FFmpeg frame, no sws_scale.
             if zoomed {
-                // Step 4: Zoom — crop from comp_buf, scale into rgba_frame.
-                // rgba_frame allocation is reused across frames (pre-allocated above).
                 let (cx, cy, crop_w, crop_h) = zoom::compute_crop_rect(
                     zoom_level, focus_x, focus_y,
                     layout.canvas_w, layout.canvas_h,
                 );
-
-                // Rebuild scaler and cropped frame only when crop dimensions change.
-                let cache_valid = zoom_cache
-                    .as_ref()
-                    .map_or(false, |(ccw, cch, _, _)| *ccw == crop_w && *cch == crop_h);
-
-                if !cache_valid {
-                    let cropped_frame = ffmpeg::frame::Video::new(Pixel::RGBA, crop_w, crop_h);
-                    let scaler = scaling::Context::get(
-                        Pixel::RGBA, crop_w, crop_h,
-                        Pixel::RGBA, layout.canvas_w, layout.canvas_h,
-                        scaling::Flags::BILINEAR,
-                    ).map_err(|e| format!("Zoom scaler failed: {}", e))?;
-                    zoom_cache = Some((crop_w, crop_h, cropped_frame, scaler));
-                }
-
-                let entry = zoom_cache.as_mut().unwrap();
-
-                {
-                    let cropped_stride = entry.2.stride(0);
-                    let cropped_data = entry.2.data_mut(0);
-                    for row in 0..crop_h as usize {
-                        let src_off = ((cy as usize + row) * cw + cx as usize) * 4;
-                        let dst_off = row * cropped_stride;
-                        let len = crop_w as usize * 4;
-                        cropped_data[dst_off..dst_off + len]
-                            .copy_from_slice(&comp_buf[src_off..src_off + len]);
-                    }
-                }
-
-                entry.3.run(&entry.2, &mut rgba_frame)
-                    .map_err(|e| format!("Zoom scale failed: {}", e))?;
-            } else {
-                // No zoom — copy comp_buf (packed) into rgba_frame (may have stride padding).
-                let frame_stride = rgba_frame.stride(0);
-                let frame_data = rgba_frame.data_mut(0);
-                for row in 0..ch {
-                    let src_offset = row * cw * 4;
-                    let dst_offset = row * frame_stride;
-                    frame_data[dst_offset..dst_offset + cw * 4]
-                        .copy_from_slice(&comp_buf[src_offset..src_offset + cw * 4]);
-                }
+                zoom::blit_bilinear(
+                    &comp_buf, cw,
+                    cx as usize, cy as usize, crop_w as usize, crop_h as usize,
+                    &mut zoom_buf, cw, ch,
+                );
             }
 
+            // post_zoom points to the packed RGBA buffer that has the current frame
+            // (zoom_buf if we zoomed, comp_buf otherwise).
+            let post_zoom: &[u8] = if zoomed { &zoom_buf } else { &comp_buf };
+
             // Step 4b: Motion blur (after zoom, before YUV conversion).
-            //
-            // apply() reads from comp_buf and writes blurred output to blur_scratch,
-            // with no internal allocation or copy.  We then write blur_scratch back
-            // into rgba_frame for the YUV step.
-            if has_motion_blur {
+            let blurred = if has_motion_blur {
                 let curr_transform = motion_blur::CameraTransform {
                     x: focus_x,
                     y: focus_y,
@@ -407,42 +369,41 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
                 let fps = input_frame_rate.0 as f64 / input_frame_rate.1.max(1) as f64;
                 let dt = if fps > 0.0 { 1.0 / fps } else { 1.0 / 30.0 };
 
-                if let Some(ref prev) = prev_transform {
+                let did_blur = if let Some(ref prev) = prev_transform {
                     let (blur_vx, blur_vy, speed) = motion_blur::compute_camera_velocity(
                         prev, &curr_transform, dt, layout.canvas_w as f64,
                     );
                     let blur_px = motion_blur::compute_blur_radius(speed, args.motion_blur);
-
                     if blur_px >= 0.5 {
-                        // Strip stride from rgba_frame into comp_buf for a packed source.
-                        let frame_data   = rgba_frame.data(0);
-                        let frame_stride = rgba_frame.stride(0);
-                        for row in 0..ch {
-                            let src_off = row * frame_stride;
-                            let dst_off = row * cw * 4;
-                            comp_buf[dst_off..dst_off + cw * 4]
-                                .copy_from_slice(&frame_data[src_off..src_off + cw * 4]);
-                        }
-
-                        // Blur: read comp_buf → write blur_scratch (no internal copy).
                         motion_blur::apply(
-                            &comp_buf, &mut blur_scratch,
+                            post_zoom, &mut blur_scratch,
                             cw as u32, ch as u32,
                             blur_vx, blur_vy, blur_px,
                         );
-
-                        // Write blurred result back into rgba_frame with stride.
-                        let frame_stride = rgba_frame.stride(0);
-                        let frame_data   = rgba_frame.data_mut(0);
-                        for row in 0..ch {
-                            let src_off = row * cw * 4;
-                            let dst_off = row * frame_stride;
-                            frame_data[dst_off..dst_off + cw * 4]
-                                .copy_from_slice(&blur_scratch[src_off..src_off + cw * 4]);
-                        }
+                        true
+                    } else {
+                        false
                     }
-                }
+                } else {
+                    false
+                };
                 prev_transform = Some(curr_transform);
+                did_blur
+            } else {
+                false
+            };
+
+            // Step 5 (prep): write final packed buffer → rgba_frame with stride.
+            let output_buf: &[u8] = if blurred { &blur_scratch } else { post_zoom };
+            {
+                let frame_stride = rgba_frame.stride(0);
+                let frame_data   = rgba_frame.data_mut(0);
+                for row in 0..ch {
+                    let src_off = row * cw * 4;
+                    let dst_off = row * frame_stride;
+                    frame_data[dst_off..dst_off + cw * 4]
+                        .copy_from_slice(&output_buf[src_off..src_off + cw * 4]);
+                }
             }
 
             // Step 5: Convert RGBA to YUV420P for encoder
