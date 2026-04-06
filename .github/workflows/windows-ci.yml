@@ -27,7 +27,8 @@ jobs:
             nasm \
             cmake \
             ninja-build \
-            pkg-config
+            pkg-config \
+            libz-mingw-w64-dev
 
       - name: Build static x264
         run: |
@@ -89,8 +90,8 @@ jobs:
             --enable-protocol=file,pipe \
             --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
             --enable-small \
-            --extra-cflags="-I$PREFIX/include" \
-            --extra-ldflags="-L$PREFIX/lib"
+            --extra-cflags="-I$PREFIX/include -I/usr/x86_64-w64-mingw32/include" \
+            --extra-ldflags="-L$PREFIX/lib -L/usr/x86_64-w64-mingw32/lib"
           make -j$(nproc)
           make install
 
