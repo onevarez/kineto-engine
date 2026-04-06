@@ -1,6 +1,89 @@
 {
   "runs": [
     {
+      "sha": "314e923",
+      "sha_full": "314e923737b0f8ee19da5b320107c274a0c71eef",
+      "date": "2026-04-06T20:14:18Z",
+      "branch": "main",
+      "run_url": "https://github.com/onevarez/kineto-engine/actions/runs/24048628410",
+      "platform": "linux-x64",
+      "binary_size": 16567744,
+      "scenarios": {
+        "360p-plain": {
+          "mean": 3.478,
+          "stddev": 0.014,
+          "fps": 172.5,
+          "peak_kb": 93364
+        },
+        "360p-shadow": {
+          "mean": 3.48,
+          "stddev": 0.029,
+          "fps": 172.4,
+          "peak_kb": 92240
+        },
+        "360p-zoom": {
+          "mean": 4.22,
+          "stddev": 0.006,
+          "fps": 142.2,
+          "peak_kb": 95420
+        },
+        "360p-full": {
+          "mean": 4.44,
+          "stddev": 0.007,
+          "fps": 135.1,
+          "peak_kb": 95188
+        },
+        "720p-plain": {
+          "mean": 7.33,
+          "stddev": 0.089,
+          "fps": 81.9,
+          "peak_kb": 342836
+        },
+        "720p-shadow": {
+          "mean": 7.309,
+          "stddev": 0.013,
+          "fps": 82.1,
+          "peak_kb": 341608
+        },
+        "720p-zoom": {
+          "mean": 10.813,
+          "stddev": 0.03,
+          "fps": 55.5,
+          "peak_kb": 347940
+        },
+        "720p-full": {
+          "mean": 12.278,
+          "stddev": 0.043,
+          "fps": 48.9,
+          "peak_kb": 351944
+        },
+        "1080p-plain": {
+          "mean": 14.372,
+          "stddev": 0.056,
+          "fps": 41.7,
+          "peak_kb": 646676
+        },
+        "1080p-shadow": {
+          "mean": 14.463,
+          "stddev": 0.011,
+          "fps": 41.5,
+          "peak_kb": 651796
+        },
+        "1080p-zoom": {
+          "mean": 22.251,
+          "stddev": 0.133,
+          "fps": 27.0,
+          "peak_kb": 662720
+        },
+        "1080p-full": {
+          "mean": 26.049,
+          "stddev": 0.025,
+          "fps": 23.0,
+          "peak_kb": 675716
+        }
+      }
+    },
+    {
       "sha": "19ba7d9",
       "sha_full": "19ba7d91cfa15e5ac138827c5acddc2bf78db982",
       "date": "2026-04-06T19:39:11Z",
