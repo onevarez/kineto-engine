@@ -96,6 +96,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-Bstatic");
         println!("cargo:rustc-link-arg=-lx264");
         println!("cargo:rustc-link-arg=-lx265");
+        println!("cargo:rustc-link-arg=-lstdc++");
         println!("cargo:rustc-link-arg=-lz");
         println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
         println!("cargo:rustc-link-arg=-lbcrypt");
