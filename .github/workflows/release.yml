@@ -159,7 +159,7 @@ jobs:
           git clone --depth 1 -b 4.1 https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
           # Patch CMakeLists.txt for CMake 4.x compatibility:
           # update minimum version and remove policies that can no longer be set to OLD
-          sed -i 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/' \
+          sed -i 's/cmake_minimum_required([^)]*)/cmake_minimum_required(VERSION 3.5)/g' \
               /tmp/x265-src/source/CMakeLists.txt
           sed -i '/cmake_policy(SET CMP0025 OLD)/d' /tmp/x265-src/source/CMakeLists.txt
           sed -i '/cmake_policy(SET CMP0054 OLD)/d' /tmp/x265-src/source/CMakeLists.txt
