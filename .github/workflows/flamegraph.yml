@@ -5,7 +5,7 @@ on:
 
 env:
   FFMPEG_VERSION: "7.1"
-  FFMPEG_CACHE_V: "1"
+  FFMPEG_CACHE_V: "2"
 
 permissions:
   contents: read
@@ -85,7 +85,6 @@ jobs:
             --enable-filter=overlay,scale,crop,color,format,pad,alphamerge,null,anull,aformat,setpts,asetpts,fps,trim,atrim,split,asplit,buffer,buffersink,abuffer,abuffersink \
             --enable-protocol=file,pipe \
             --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
-            --enable-small \
             --extra-cflags="-I$PREFIX/include" \
             --extra-ldflags="-L$PREFIX/lib"
           make -j$(nproc)

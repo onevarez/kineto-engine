@@ -86,9 +86,14 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
         let tb = stream.time_base();
         let fr = stream.avg_frame_rate();
         let params = stream.parameters();
-        let dec = ffmpeg::codec::Context::from_parameters(params)
-            .map_err(|e| format!("Failed to create decoder: {}", e))?
-            .decoder()
+        let mut dec_ctx = ffmpeg::codec::Context::from_parameters(params)
+            .map_err(|e| format!("Failed to create decoder: {}", e))?;
+        dec_ctx.set_threading(ffmpeg::threading::Config {
+            kind: ffmpeg::threading::Type::Frame,
+            count: 0,  // 0 = auto (use all available cores)
+            safe: true,
+        });
+        let dec = dec_ctx.decoder()
             .video()
             .map_err(|e| format!("Failed to open decoder: {}", e))?;
         (tb, fr, dec)
