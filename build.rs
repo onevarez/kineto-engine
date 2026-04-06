@@ -93,19 +93,23 @@ fn main() {
         if let Some(ref dir) = deps_dir {
             println!("cargo:rustc-link-arg=-L{}/lib", dir);
         }
+        // --start-group/--end-group makes ld rescan the enclosed archives
+        // repeatedly until all symbols resolve. This handles the circular
+        // dependency chain: x264/x265 → mingwex/msvcrt/kernel32, and
+        // libstdc++ → libgcc → libmingwex (self-referential), all of which
+        // were already scanned before the codec rlib was extracted.
+        println!("cargo:rustc-link-arg=-Wl,--start-group");
         println!("cargo:rustc-link-arg=-Wl,-Bstatic");
         println!("cargo:rustc-link-arg=-lx264");
         println!("cargo:rustc-link-arg=-lx265");
         println!("cargo:rustc-link-arg=-lstdc++");
+        println!("cargo:rustc-link-arg=-lgcc");
+        println!("cargo:rustc-link-arg=-lmingwex");
         println!("cargo:rustc-link-arg=-lz");
         println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
         println!("cargo:rustc-link-arg=-lbcrypt");
-        // x264/x265 object files extracted above need MinGW runtime symbols
-        // (strcasecmp/strtok_r/fseeko64 from mingwex, fwrite/_stricmp/_wfopen
-        // from msvcrt, CreateSemaphoreW/FreeLibrary from kernel32). These libs
-        // were scanned before x264 was extracted, so repeat them here.
-        println!("cargo:rustc-link-arg=-lmingwex");
         println!("cargo:rustc-link-arg=-lmsvcrt");
         println!("cargo:rustc-link-arg=-lkernel32");
+        println!("cargo:rustc-link-arg=-Wl,--end-group");
     }
 }
