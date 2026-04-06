@@ -99,5 +99,12 @@ fn main() {
         println!("cargo:rustc-link-arg=-lz");
         println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
         println!("cargo:rustc-link-arg=-lbcrypt");
+        // x264/x265 object files extracted above need MinGW runtime symbols
+        // (strcasecmp/strtok_r/fseeko64 from mingwex, fwrite/_stricmp/_wfopen
+        // from msvcrt, CreateSemaphoreW/FreeLibrary from kernel32). These libs
+        // were scanned before x264 was extracted, so repeat them here.
+        println!("cargo:rustc-link-arg=-lmingwex");
+        println!("cargo:rustc-link-arg=-lmsvcrt");
+        println!("cargo:rustc-link-arg=-lkernel32");
     }
 }
