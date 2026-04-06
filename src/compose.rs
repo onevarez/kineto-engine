@@ -32,9 +32,6 @@ unsafe impl Send for SendInput {}
 struct SendDecoder(ffmpeg::codec::decoder::Video);
 unsafe impl Send for SendDecoder {}
 
-struct SendScaler(scaling::Context);
-unsafe impl Send for SendScaler {}
-
 struct SendOutput(ffmpeg::format::context::Output);
 unsafe impl Send for SendOutput {}
 
@@ -164,13 +161,6 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
 
     let has_motion_blur = args.motion_blur > 0.0;
 
-    // ── Decode scaler ────────────────────────────────────────────────────────
-    let decode_to_rgba = scaling::Context::get(
-        input_pix_fmt, input_w, input_h,
-        Pixel::RGBA, layout.video_w, layout.video_h,
-        scaling::Flags::BILINEAR,
-    ).map_err(|e| format!("Decode scaler failed: {}", e))?;
-
     // ── Encoder setup ────────────────────────────────────────────────────────
     let encoder_codec = ffmpeg::encoder::find_by_name("libx264")
         .ok_or("libx264 encoder not found")?;
@@ -234,11 +224,14 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
     let decode_thread = {
         let ictx_s    = SendInput(ictx);
         let decoder_s = SendDecoder(decoder);
-        let scaler_s  = SendScaler(decode_to_rgba);
         std::thread::spawn(move || -> Result<(), String> {
             let mut ictx          = ictx_s.0;
             let mut decoder       = decoder_s.0;
-            let mut decode_to_rgba = scaler_s.0;
+            let mut decode_to_rgba = scaling::Context::get(
+                input_pix_fmt, input_w, input_h,
+                Pixel::RGBA, layout.video_w, layout.video_h,
+                scaling::Flags::BILINEAR,
+            ).map_err(|e| format!("Decode scaler failed: {}", e))?;
             let vw = layout.video_w as usize;
             let vh = layout.video_h as usize;
             let mut decoded_frame = ffmpeg::frame::Video::empty();
