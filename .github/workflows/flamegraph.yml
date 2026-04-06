@@ -1,0 +1,161 @@
+name: Flamegraph
+
+on:
+  workflow_dispatch:
+
+env:
+  FFMPEG_VERSION: "7.1"
+  FFMPEG_CACHE_V: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  flamegraph:
+    name: CPU Flamegraph (1080p, zoom + motion blur)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # ── FFmpeg (reuses cache from perf.yml / release.yml when available) ──
+
+      - name: Cache FFmpeg
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          key: ffmpeg-linux-x64-${{ env.FFMPEG_VERSION }}-v${{ env.FFMPEG_CACHE_V }}
+          path: ${{ runner.temp }}/ffmpeg-prefix
+
+      - name: Install FFmpeg build deps
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm zlib1g-dev cmake
+
+      - name: Build static x264
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          mkdir -p "$PREFIX"
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264-src
+          cd /tmp/x264-src
+          ./configure --prefix="$PREFIX" --enable-static --disable-shared \
+            --enable-pic --disable-cli
+          make -j$(nproc) && make install
+
+      - name: Build static x265
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          git clone --depth 1 -b 4.1 \
+            https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
+          cd /tmp/x265-src/build/linux
+          cmake ../../source \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DENABLE_SHARED=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_CLI=OFF
+          make -j$(nproc) && make install
+
+      - name: Build FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          PREFIX="${{ runner.temp }}/ffmpeg-prefix"
+          git clone --depth 1 --branch n${{ env.FFMPEG_VERSION }} \
+            https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg-src
+          cd /tmp/ffmpeg-src
+          PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
+          ./configure \
+            --prefix="$PREFIX" \
+            --enable-static --disable-shared --enable-pic \
+            --disable-autodetect --disable-programs --disable-doc --disable-network \
+            --disable-everything \
+            --pkg-config-flags="--static" \
+            --enable-avcodec --enable-avformat --enable-avfilter \
+            --enable-swscale --enable-swresample \
+            --enable-gpl --enable-zlib --enable-libx264 --enable-libx265 \
+            --enable-decoder=h264,hevc,vp8,vp9,rawvideo,png,pcm_s16le,aac,pcm_f32le \
+            --enable-encoder=libx264,libx265,rawvideo,png,aac \
+            --enable-parser=h264,hevc,vp8,vp9,aac \
+            --enable-demuxer=mov,matroska,rawvideo,image2,wav,aac \
+            --enable-muxer=mp4,mov,image2,null \
+            --enable-filter=overlay,scale,crop,color,format,pad,alphamerge,null,anull,aformat,setpts,asetpts,fps,trim,atrim,split,asplit,buffer,buffersink,abuffer,abuffersink \
+            --enable-protocol=file,pipe \
+            --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
+            --enable-small \
+            --extra-cflags="-I$PREFIX/include" \
+            --extra-ldflags="-L$PREFIX/lib"
+          make -j$(nproc)
+          make install
+
+      # ── Build ──────────────────────────────────────────────────────────────
+
+      - name: Set FFmpeg env vars
+        run: |
+          echo "FFMPEG_DIR=${{ runner.temp }}/ffmpeg-prefix"         >> "$GITHUB_ENV"
+          echo "FFMPEG_DEPS_DIR=${{ runner.temp }}/ffmpeg-prefix"    >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${{ runner.temp }}/ffmpeg-prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y pkg-config zlib1g-dev
+
+      # ── Test videos (reuses cache from perf.yml when available) ───────────
+
+      - name: Cache test videos
+        id: cache-videos
+        uses: actions/cache@v4
+        with:
+          key: test-videos-bbb-30mb-v1
+          path: fixtures/videos/
+
+      - name: Download Big Buck Bunny 1080p
+        if: steps.cache-videos.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p fixtures/videos
+          curl -fL "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4" \
+            -o fixtures/videos/bbb_1080p.mp4
+
+      # ── perf + cargo-flamegraph ────────────────────────────────────────────
+
+      - name: Install perf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y linux-tools-common linux-tools-generic
+          sudo apt-get install -y linux-tools-$(uname -r) || true
+
+      - name: Enable perf sampling
+        run: |
+          sudo sysctl kernel.perf_event_paranoid=-1
+          sudo sysctl kernel.kptr_restrict=0
+
+      - name: Cache cargo-flamegraph
+        id: cache-flamegraph
+        uses: actions/cache@v4
+        with:
+          key: cargo-flamegraph-v1
+          path: ~/.cargo/bin/flamegraph
+
+      - name: Install cargo-flamegraph
+        if: steps.cache-flamegraph.outputs.cache-hit != 'true'
+        run: cargo install flamegraph
+
+      - name: Generate flamegraph
+        run: |
+          cargo flamegraph --profile profiling --freq 997 --bin kineto -- \
+            export \
+            -i fixtures/videos/bbb_1080p.mp4 \
+            -o /tmp/flamegraph-out.mp4 \
+            --codec h264 \
+            --shadow \
+            --zoom-segments-file .github/fixtures/zoom_4clicks.json \
+            --motion-blur 0.5
+
+      - name: Upload flamegraph
+        uses: actions/upload-artifact@v4
+        with:
+          name: flamegraph-${{ github.sha }}
+          path: flamegraph.svg
+          retention-days: 30

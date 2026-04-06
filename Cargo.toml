@@ -18,3 +18,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3"
 ffmpeg-the-third = { version = "3", features = ["static"] }
 rayon = "1"
+
+[profile.profiling]
+inherits = "release"
+debug = 1
