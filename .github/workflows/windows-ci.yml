@@ -21,18 +21,18 @@ jobs:
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: false
           path-type: inherit
           install: >-
             git
             make
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-nasm
-            mingw-w64-x86_64-x264
-            mingw-w64-x86_64-x265
-            mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-x264
+            mingw-w64-ucrt-x86_64-x265
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-pkgconf
 
       - name: Build FFmpeg
         shell: msys2 {0}
@@ -42,7 +42,7 @@ jobs:
           git clone --depth 1 --branch n${{ env.FFMPEG_VERSION }} \
             https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg-src
           cd /tmp/ffmpeg-src
-          PKG_CONFIG_PATH="/mingw64/lib/pkgconfig" \
+          PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig" \
           ./configure \
             --prefix="$PREFIX" \
             --enable-static --disable-shared \
@@ -61,14 +61,14 @@ jobs:
             --enable-protocol=file,pipe \
             --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
             --enable-small \
-            --extra-cflags="-I$PREFIX/include -I/mingw64/include -Wno-error=incompatible-pointer-types" \
-            --extra-ldflags="-L$PREFIX/lib -L/mingw64/lib" \
+            --extra-cflags="-I$PREFIX/include -I/ucrt64/include -Wno-error=incompatible-pointer-types" \
+            --extra-ldflags="-L$PREFIX/lib -L/ucrt64/lib" \
             --target-os=mingw32 --arch=x86_64 --disable-pthreads --enable-w32threads
           make -j$(nproc)
           make install
-          cp /mingw64/lib/libx264.a "$PREFIX/lib/"
-          cp /mingw64/lib/libx265.a "$PREFIX/lib/"
-          cp /mingw64/lib/libz.a    "$PREFIX/lib/" 2>/dev/null || true
+          cp /ucrt64/lib/libx264.a "$PREFIX/lib/"
+          cp /ucrt64/lib/libx265.a "$PREFIX/lib/"
+          cp /ucrt64/lib/libz.a    "$PREFIX/lib/" 2>/dev/null || true
 
       - name: Set FFmpeg env vars
         shell: bash
