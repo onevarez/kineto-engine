@@ -3,7 +3,6 @@
 //! Ported from `so-engine/src/zoom.rs` and `so-engine/src/easing.rs`.
 //! Standalone — no dependency on so-engine.
 
-use rayon::prelude::*;
 use serde::Deserialize;
 
 /// Default duration of the zoom-in transition in seconds.
@@ -266,63 +265,6 @@ pub fn compute_crop_rect(
         .min((canvas_h - crop_h) as f64) as u32;
 
     (crop_x, crop_y, crop_w, crop_h)
-}
-
-/// Bilinear upscale of a crop region directly onto a canvas-sized output buffer.
-///
-/// Reads from `src` (packed RGBA, `canvas_w * canvas_h * 4` bytes) at the crop
-/// region `(cx, cy, crop_w, crop_h)` and writes the bilinearly scaled result to
-/// `dst` (packed RGBA, `canvas_w * canvas_h * 4` bytes, same dimensions as src).
-/// Both buffers must be packed with no stride padding.
-///
-/// Parallelised across output rows via Rayon — no intermediate allocation.
-pub fn blit_bilinear(
-    src: &[u8],
-    canvas_w: usize,
-    cx: usize, cy: usize,
-    crop_w: usize, crop_h: usize,
-    dst: &mut [u8],
-    dst_w: usize, dst_h: usize,
-) {
-    let scale_x = crop_w as f64 / dst_w as f64;
-    let scale_y = crop_h as f64 / dst_h as f64;
-    let max_sx = cx + crop_w - 1;
-    let max_sy = cy + crop_h - 1;
-
-    dst.par_chunks_mut(dst_w * 4)
-        .enumerate()
-        .for_each(|(oy, row)| {
-            let src_y  = cy as f64 + oy as f64 * scale_y;
-            let sy0    = (src_y as usize).min(max_sy);
-            let sy1    = (sy0 + 1).min(max_sy);
-            let ty     = ((src_y - sy0 as f64) * 256.0) as u32;
-
-            let base0 = sy0 * canvas_w * 4;
-            let base1 = sy1 * canvas_w * 4;
-
-            for ox in 0..dst_w {
-                let src_x = cx as f64 + ox as f64 * scale_x;
-                let sx0   = (src_x as usize).min(max_sx);
-                let sx1   = (sx0 + 1).min(max_sx);
-                let tx    = ((src_x - sx0 as f64) * 256.0) as u32;
-
-                let i00 = base0 + sx0 * 4;
-                let i10 = base0 + sx1 * 4;
-                let i01 = base1 + sx0 * 4;
-                let i11 = base1 + sx1 * 4;
-
-                let px = ox * 4;
-                for c in 0..4 {
-                    let p00 = src[i00 + c] as u32;
-                    let p10 = src[i10 + c] as u32;
-                    let p01 = src[i01 + c] as u32;
-                    let p11 = src[i11 + c] as u32;
-                    let top    = p00 * (256 - tx) + p10 * tx;
-                    let bottom = p01 * (256 - tx) + p11 * tx;
-                    row[px + c] = ((top * (256 - ty) + bottom * ty) >> 16) as u8;
-                }
-            }
-        });
 }
 
 #[cfg(test)]
