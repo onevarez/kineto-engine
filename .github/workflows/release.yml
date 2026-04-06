@@ -160,6 +160,7 @@ jobs:
           cmake /tmp/x265-src/source \
             -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DENABLE_SHARED=OFF \
             -DENABLE_CLI=OFF
           ninja && ninja install
