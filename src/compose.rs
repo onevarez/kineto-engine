@@ -91,7 +91,6 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
         dec_ctx.set_threading(ffmpeg::threading::Config {
             kind: ffmpeg::threading::Type::Frame,
             count: 0,  // 0 = auto (use all available cores)
-            safe: true,
         });
         let dec = dec_ctx.decoder()
             .video()
