@@ -6,6 +6,8 @@
 //! (background, overlay, corners, shadow) in Rust using pre-baked RGBA images.
 
 use crate::assets;
+use crate::cursor::{self, SmoothedFrame};
+use crate::motion_blur;
 use crate::zoom::{self, ZoomSegment};
 use crate::{CompositionLayout, ExportArgs};
 
@@ -86,6 +88,48 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
     if has_zoom {
         eprintln!("Zoom: {} segments, easing: {}", zoom_segments.unwrap().len(), args.zoom_easing);
     }
+
+    // ── Cursor ──
+    let smoothed_cursor: Option<Vec<SmoothedFrame>> = if let Some(ref path) = args.cursor_file {
+        let fps = input_frame_rate.0 as f64 / input_frame_rate.1 as f64;
+        match cursor::load_and_smooth(path, &args.cursor_physics, fps) {
+            Ok(frames) => {
+                eprintln!("Cursor: {} smoothed frames, preset: {}", frames.len(), args.cursor_physics);
+                Some(frames)
+            }
+            Err(e) => {
+                eprintln!("WARNING: Failed to load cursor: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let has_cursor = smoothed_cursor.is_some();
+
+    // Load or generate cursor sprite
+    let cursor_sprite = if has_cursor {
+        if let Some(ref path) = args.cursor_image {
+            match assets::load_cursor_sprite(path) {
+                Ok(img) => {
+                    eprintln!("Cursor sprite: {}x{} from {}", img.width(), img.height(), path);
+                    Some(img)
+                }
+                Err(e) => {
+                    eprintln!("WARNING: {}, using default cursor", e);
+                    Some(assets::generate_cursor_sprite())
+                }
+            }
+        } else {
+            eprintln!("Cursor sprite: default arrow");
+            Some(assets::generate_cursor_sprite())
+        }
+    } else {
+        None
+    };
+
+    // ── Motion blur ──
+    let has_motion_blur = args.motion_blur > 0.0;
 
     // ── Scalers ──
     // Decode to RGBA for composition
@@ -178,6 +222,14 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
     // ── Composition buffer (RGBA, canvas-sized) ──
     let mut comp_buf: Vec<u8> = vec![0u8; cw * ch * 4];
 
+    // ── Motion blur scratch buffer ──
+    let mut blur_scratch: Vec<u8> = if has_motion_blur {
+        vec![0u8; cw * ch * 4]
+    } else {
+        Vec::new()
+    };
+    let mut prev_transform: Option<motion_blur::CameraTransform> = None;
+
     for result in ictx.packets() {
         let (stream, packet) = result.map_err(|e| format!("Read error: {}", e))?;
         // Copy audio packets directly
@@ -233,6 +285,36 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
                 }
             }
 
+            // Step 2b: Draw cursor sprite onto composition
+            if has_cursor {
+                let time_secs = pts.unwrap_or(0) as f64
+                    * input_time_base.0 as f64
+                    / input_time_base.1 as f64;
+
+                if let Some(frame) = cursor::frame_at_time(smoothed_cursor.as_deref().unwrap(), time_secs) {
+                    let cursor_click_only = args.cursor_display == "click";
+                    let should_draw = !cursor_click_only || frame.is_clicking;
+
+                    if should_draw {
+                        if let Some(ref sprite) = cursor_sprite {
+                            let cursor_canvas_x = layout.video_x as f64
+                                + (frame.x / input_w as f64) * layout.video_w as f64;
+                            let cursor_canvas_y = layout.video_y as f64
+                                + (frame.y / input_h as f64) * layout.video_h as f64;
+
+                            assets::draw_cursor_on_buffer(
+                                &mut comp_buf,
+                                cw, ch,
+                                sprite,
+                                cursor_canvas_x,
+                                cursor_canvas_y,
+                                frame.click_scale,
+                            );
+                        }
+                    }
+                }
+            }
+
             // Step 3: Copy RGBA composition into an ffmpeg frame
             let mut rgba_frame = ffmpeg::frame::Video::new(Pixel::RGBA, layout.canvas_w, layout.canvas_h);
             let frame_stride = rgba_frame.stride(0);
@@ -244,50 +326,98 @@ pub fn run(args: &ExportArgs, zoom_segments: Option<&[ZoomSegment]>) -> Result<(
                     .copy_from_slice(&comp_buf[src_offset..src_offset + cw * 4]);
             }
 
-            // Step 4: Apply zoom if needed — crop from RGBA comp_buf, scale back to canvas
-            if has_zoom {
-                let time_secs = pts.unwrap_or(0) as f64
-                    * input_time_base.0 as f64
-                    / input_time_base.1 as f64;
+            // Step 4: Compute time and apply zoom
+            let time_secs = pts.unwrap_or(0) as f64
+                * input_time_base.0 as f64
+                / input_time_base.1 as f64;
 
-                let (zoom_level, focus_x, focus_y) = zoom::compute_zoom_at_time(
+            let (zoom_level, focus_x, focus_y) = if has_zoom {
+                zoom::compute_zoom_at_time(
                     zoom_segments.unwrap(), time_secs,
                     layout.canvas_w as f64, layout.canvas_h as f64,
                     layout.video_x as f64, layout.video_y as f64,
                     layout.video_w as f64, layout.video_h as f64,
                     &args.zoom_easing,
+                    args.zoom_in_duration, args.zoom_out_duration,
+                )
+            } else {
+                (1.0, layout.canvas_w as f64 / 2.0, layout.canvas_h as f64 / 2.0)
+            };
+
+            if zoom_level > 1.01 {
+                let (cx, cy, crop_w, crop_h) = zoom::compute_crop_rect(
+                    zoom_level, focus_x, focus_y,
+                    layout.canvas_w, layout.canvas_h,
                 );
 
-                if zoom_level > 1.01 {
-                    let (cx, cy, crop_w, crop_h) = zoom::compute_crop_rect(
-                        zoom_level, focus_x, focus_y,
-                        layout.canvas_w, layout.canvas_h,
-                    );
-
-                    // Copy cropped region from comp_buf into a smaller RGBA frame
-                    let mut cropped = ffmpeg::frame::Video::new(
-                        Pixel::RGBA, crop_w, crop_h,
-                    );
-                    let cropped_stride = cropped.stride(0);
-                    let cropped_data = cropped.data_mut(0);
-                    for row in 0..crop_h as usize {
-                        let src_off = ((cy as usize + row) * cw + cx as usize) * 4;
-                        let dst_off = row * cropped_stride;
-                        let len = crop_w as usize * 4;
-                        cropped_data[dst_off..dst_off + len]
-                            .copy_from_slice(&comp_buf[src_off..src_off + len]);
-                    }
-
-                    // Scale cropped region back to canvas size
-                    let mut zoom_scaler = scaling::Context::get(
-                        Pixel::RGBA, crop_w, crop_h,
-                        Pixel::RGBA, layout.canvas_w, layout.canvas_h,
-                        scaling::Flags::BILINEAR,
-                    ).map_err(|e| format!("Zoom scaler failed: {}", e))?;
-
-                    zoom_scaler.run(&cropped, &mut rgba_frame)
-                        .map_err(|e| format!("Zoom scale failed: {}", e))?;
+                let mut cropped = ffmpeg::frame::Video::new(
+                    Pixel::RGBA, crop_w, crop_h,
+                );
+                let cropped_stride = cropped.stride(0);
+                let cropped_data = cropped.data_mut(0);
+                for row in 0..crop_h as usize {
+                    let src_off = ((cy as usize + row) * cw + cx as usize) * 4;
+                    let dst_off = row * cropped_stride;
+                    let len = crop_w as usize * 4;
+                    cropped_data[dst_off..dst_off + len]
+                        .copy_from_slice(&comp_buf[src_off..src_off + len]);
                 }
+
+                let mut zoom_scaler = scaling::Context::get(
+                    Pixel::RGBA, crop_w, crop_h,
+                    Pixel::RGBA, layout.canvas_w, layout.canvas_h,
+                    scaling::Flags::BILINEAR,
+                ).map_err(|e| format!("Zoom scaler failed: {}", e))?;
+
+                zoom_scaler.run(&cropped, &mut rgba_frame)
+                    .map_err(|e| format!("Zoom scale failed: {}", e))?;
+            }
+
+            // Step 4b: Apply motion blur (after zoom, before YUV conversion)
+            if has_motion_blur {
+                let curr_transform = motion_blur::CameraTransform {
+                    x: focus_x,
+                    y: focus_y,
+                    scale: zoom_level,
+                };
+                let fps = input_frame_rate.0 as f64 / input_frame_rate.1.max(1) as f64;
+                let dt = if fps > 0.0 { 1.0 / fps } else { 1.0 / 30.0 };
+
+                if let Some(ref prev) = prev_transform {
+                    let (vx, vy, speed) = motion_blur::compute_camera_velocity(
+                        prev, &curr_transform, dt, layout.canvas_w as f64,
+                    );
+                    let blur_px = motion_blur::compute_blur_radius(speed, args.motion_blur);
+
+                    if blur_px >= 0.5 {
+                        // Read from rgba_frame into comp_buf, blur, write back
+                        let frame_data = rgba_frame.data(0);
+                        let frame_stride = rgba_frame.stride(0);
+                        for row in 0..ch {
+                            let src_off = row * frame_stride;
+                            let dst_off = row * cw * 4;
+                            comp_buf[dst_off..dst_off + cw * 4]
+                                .copy_from_slice(&frame_data[src_off..src_off + cw * 4]);
+                        }
+
+                        motion_blur::apply(
+                            &mut comp_buf, &mut blur_scratch,
+                            cw as u32, ch as u32,
+                            vx, vy, blur_px,
+                        );
+
+                        // Write blurred result back to rgba_frame
+                        let frame_stride = rgba_frame.stride(0);
+                        let frame_data = rgba_frame.data_mut(0);
+                        for row in 0..ch {
+                            let src_off = row * cw * 4;
+                            let dst_off = row * frame_stride;
+                            frame_data[dst_off..dst_off + cw * 4]
+                                .copy_from_slice(&comp_buf[src_off..src_off + cw * 4]);
+                        }
+                    }
+                }
+                prev_transform = Some(curr_transform);
             }
 
             // Step 5: Convert RGBA to YUV420P for encoder
