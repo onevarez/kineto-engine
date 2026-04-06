@@ -83,4 +83,21 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=z");
     }
+
+    // Windows GNU (MinGW): GNU ld is single-pass. Cargo bundles libavcodec.a into the
+    // ffmpeg_sys_the_third rlib, so libx264.c inside avcodec only demands x264/x265/z/bcrypt
+    // symbols AFTER the rlib is processed. The early -lx264 etc. (from rustc-link-lib above)
+    // are scanned before the rlib, extracting nothing. Repeating them as link-args places them
+    // AFTER the rlibs in the final link command, so ld finds the symbols on the second pass.
+    if target_os == "windows" && target_env == "gnu" {
+        if let Some(ref dir) = deps_dir {
+            println!("cargo:rustc-link-arg=-L{}/lib", dir);
+        }
+        println!("cargo:rustc-link-arg=-Wl,-Bstatic");
+        println!("cargo:rustc-link-arg=-lx264");
+        println!("cargo:rustc-link-arg=-lx265");
+        println!("cargo:rustc-link-arg=-lz");
+        println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
+        println!("cargo:rustc-link-arg=-lbcrypt");
+    }
 }
