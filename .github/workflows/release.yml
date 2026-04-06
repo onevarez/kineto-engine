@@ -55,6 +55,7 @@ jobs:
           update: false
           install: >-
             git
+            diffutils
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-x264
@@ -167,7 +168,7 @@ jobs:
             --enable-protocol=file,pipe \
             --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
             --enable-small \
-            --extra-cflags="-I$PREFIX/include -I/mingw64/include" \
+            --extra-cflags="-I$PREFIX/include -I/mingw64/include -Wno-error=incompatible-pointer-types" \
             --extra-ldflags="-L$PREFIX/lib -L/mingw64/lib" \
             ${{ matrix.ffmpeg_extra }}
           make -j$(nproc)
