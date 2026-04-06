@@ -251,15 +251,18 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           REPO_URL="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          cd /tmp/bench-data
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
           if [ "${{ steps.fetch-history.outputs.exists }}" = "false" ]; then
+            cd /tmp/bench-data
             git init
-            git remote add origin "$REPO_URL"
             git checkout --orphan bench-data
+            git remote add origin "$REPO_URL"
+          else
+            cd /tmp/bench-data
           fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add history.json
           git commit -m "bench: ${{ github.sha }}" || true
