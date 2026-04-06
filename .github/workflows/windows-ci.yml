@@ -63,6 +63,7 @@ jobs:
             https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg-src
           cd /tmp/ffmpeg-src
           PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
+          PKG_CONFIG_ALLOW_CROSS=1 \
           ./configure \
             --prefix="$PREFIX" \
             --enable-cross-compile \
