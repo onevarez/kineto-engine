@@ -2,7 +2,7 @@
 
 Cinematic video composition from the command line. Takes a screen recording and produces a polished video with a colored background, padding, rounded corners, drop shadow, and smooth auto-zoom — all in a single binary with no runtime dependencies.
 
-Built on statically linked FFmpeg (libav*). Decodes H.264/VP8, composites in RGBA, encodes to H.264 via libx264.
+Built on statically linked FFmpeg (libav*). Decodes H.264/VP8/HEVC, composites in RGBA, encodes to H.264 or HEVC via libx264/libx265. Runs on macOS, Linux, and Windows — no runtime dependencies on any platform.
 
 ## Install
 
