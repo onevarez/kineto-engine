@@ -1,5 +1,7 @@
 //! Velocity-based directional motion blur for camera movement.
 
+use rayon::prelude::*;
+
 const DEADZONE_PX_PER_S: f64 = 12.0;
 const MAX_BLUR_PX: f64 = 14.0;
 const PEAK_VELOCITY: f64 = 1400.0;
@@ -98,31 +100,33 @@ pub fn apply(
         })
         .collect();
 
-    for y in 0..h {
-        for x in 0..w {
-            let mut r: u32 = 0;
-            let mut g: u32 = 0;
-            let mut b: u32 = 0;
-            let mut a: u32 = 0;
+    dst.par_chunks_mut(w * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for x in 0..w {
+                let mut r: u32 = 0;
+                let mut g: u32 = 0;
+                let mut b: u32 = 0;
+                let mut a: u32 = 0;
 
-            for &(tdx, tdy) in &tap_deltas {
-                let sx = (x as i32 + tdx).clamp(0, w as i32 - 1) as usize;
-                let sy = (y as i32 + tdy).clamp(0, h as i32 - 1) as usize;
-                let idx = (sy * w + sx) * 4;
-                r += src[idx]     as u32;
-                g += src[idx + 1] as u32;
-                b += src[idx + 2] as u32;
-                a += src[idx + 3] as u32;
+                for &(tdx, tdy) in &tap_deltas {
+                    let sx = (x as i32 + tdx).clamp(0, w as i32 - 1) as usize;
+                    let sy = (y as i32 + tdy).clamp(0, h as i32 - 1) as usize;
+                    let idx = (sy * w + sx) * 4;
+                    r += src[idx]     as u32;
+                    g += src[idx + 1] as u32;
+                    b += src[idx + 2] as u32;
+                    a += src[idx + 3] as u32;
+                }
+
+                // Rounding integer division: (sum + taps/2) / taps
+                let px = x * 4;
+                row[px]     = ((r + half_taps_u32) / taps_u32) as u8;
+                row[px + 1] = ((g + half_taps_u32) / taps_u32) as u8;
+                row[px + 2] = ((b + half_taps_u32) / taps_u32) as u8;
+                row[px + 3] = ((a + half_taps_u32) / taps_u32) as u8;
             }
-
-            // Rounding integer division: (sum + taps/2) / taps
-            let idx = (y * w + x) * 4;
-            dst[idx]     = ((r + half_taps_u32) / taps_u32) as u8;
-            dst[idx + 1] = ((g + half_taps_u32) / taps_u32) as u8;
-            dst[idx + 2] = ((b + half_taps_u32) / taps_u32) as u8;
-            dst[idx + 3] = ((a + half_taps_u32) / taps_u32) as u8;
-        }
-    }
+        });
 }
 
 #[cfg(test)]
