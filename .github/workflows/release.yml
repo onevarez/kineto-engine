@@ -272,6 +272,8 @@ jobs:
           echo "FFMPEG_DEPS_DIR=C:/ffmpeg-prefix"                  >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=C:/ffmpeg-prefix/lib/pkgconfig"    >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_CROSS=1"                          >> "$GITHUB_ENV"
+          # Inject search path early so rustc places -L before -l flags in link cmd
+          echo "RUSTFLAGS=-L native=C:/ffmpeg-prefix/lib"          >> "$GITHUB_ENV"
 
       - name: Install pkg-config (Linux)
         if: runner.os == 'Linux'
