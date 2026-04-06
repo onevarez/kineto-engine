@@ -56,13 +56,13 @@ jobs:
           install: >-
             git
             diffutils
+            make
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-nasm
-            mingw-w64-x86_64-x264
-            mingw-w64-x86_64-x265
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-pkgconf
-            make
 
       - name: Build static x264 (Linux)
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
@@ -140,6 +140,30 @@ jobs:
             cp "$BREW_PREFIX/opt/x265/lib/libx265.a" "$PREFIX/lib/" 2>/dev/null || true
           fi
 
+      - name: Build static x264 (Windows)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'windows-x64'
+        shell: msys2 {0}
+        run: |
+          PREFIX="/c/ffmpeg-prefix"
+          mkdir -p "$PREFIX"
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264-src
+          cd /tmp/x264-src
+          ./configure --prefix="$PREFIX" --enable-static --disable-shared --disable-cli
+          make -j$(nproc) && make install
+
+      - name: Build static x265 (Windows)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'windows-x64'
+        shell: msys2 {0}
+        run: |
+          PREFIX="/c/ffmpeg-prefix"
+          git clone --depth 1 -b 4.1 https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
+          cmake /tmp/x265-src/source \
+            -G Ninja \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF
+          ninja && ninja install
+
       - name: Build FFmpeg (Windows)
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true' && matrix.platform == 'windows-x64'
         shell: msys2 {0}
@@ -173,9 +197,7 @@ jobs:
             ${{ matrix.ffmpeg_extra }}
           make -j$(nproc)
           make install
-          cp /mingw64/lib/libx264.a "$PREFIX/lib/"
-          cp /mingw64/lib/libx265.a "$PREFIX/lib/"
-          cp /mingw64/lib/libz.a    "$PREFIX/lib/"
+          cp /mingw64/lib/libz.a "$PREFIX/lib/"
 
   build:
     needs: build-ffmpeg
@@ -249,7 +271,7 @@ jobs:
           echo "FFMPEG_DIR=C:/ffmpeg-prefix"                                          >> "$GITHUB_ENV"
           echo "FFMPEG_DEPS_DIR=C:/ffmpeg-prefix"                                     >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=C:/ffmpeg-prefix/lib/pkgconfig"                       >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc"    >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=C:/msys64/mingw64/bin/x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_CROSS=1"                                              >> "$GITHUB_ENV"
 
       - name: Install pkg-config (Linux)

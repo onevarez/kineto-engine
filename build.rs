@@ -77,6 +77,10 @@ fn main() {
         _ => {}
     }
 
-    // zlib
-    println!("cargo:rustc-link-lib=z");
+    // zlib (static on Windows to avoid DLL import stub ambiguity)
+    if target_os == "windows" {
+        println!("cargo:rustc-link-lib=static=z");
+    } else {
+        println!("cargo:rustc-link-lib=z");
+    }
 }
