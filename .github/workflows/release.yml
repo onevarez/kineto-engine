@@ -272,8 +272,17 @@ jobs:
           echo "FFMPEG_DEPS_DIR=C:/ffmpeg-prefix"                  >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=C:/ffmpeg-prefix/lib/pkgconfig"    >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_CROSS=1"                          >> "$GITHUB_ENV"
-          # Inject search path early so rustc places -L before -l flags in link cmd
-          echo "RUSTFLAGS=-L native=C:/ffmpeg-prefix/lib"          >> "$GITHUB_ENV"
+
+      # Copy x264/x265/z into MinGW64's default lib dir so GNU ld finds them
+      # before it sees -lx264 (which appears before -L C:/ffmpeg-prefix/lib
+      # in Rust's generated link command, causing undefined refs otherwise)
+      - name: Copy static libs to MinGW64 lib (Windows)
+        if: matrix.platform == 'windows-x64'
+        shell: msys2 {0}
+        run: |
+          cp /c/ffmpeg-prefix/lib/libx264.a /mingw64/lib/
+          cp /c/ffmpeg-prefix/lib/libx265.a /mingw64/lib/
+          cp /c/ffmpeg-prefix/lib/libz.a    /mingw64/lib/ 2>/dev/null || true
 
       - name: Install pkg-config (Linux)
         if: runner.os == 'Linux'
