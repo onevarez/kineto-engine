@@ -240,6 +240,151 @@ pub fn generate_corner_mask(
     mask
 }
 
+/// Generate a default macOS-style cursor arrow as RGBA.
+/// Returns a 24x24 white arrow with black outline and drop shadow.
+pub fn generate_cursor_sprite() -> RgbaImage {
+    let w = 24u32;
+    let h = 36u32;
+    let mut img = RgbaImage::new(w, h);
+
+    // Define the arrow polygon as (x, y) points, scaled to pixel grid.
+    // Classic macOS arrow shape: tall narrow pointer.
+    let outline: &[(f64, f64)] = &[
+        (1.0, 0.0),
+        (1.0, 24.0),
+        (6.0, 19.0),
+        (10.0, 28.0),
+        (14.0, 26.5),
+        (10.0, 17.5),
+        (16.0, 17.5),
+        (1.0, 0.0),
+    ];
+
+    let fill: &[(f64, f64)] = &[
+        (3.0, 3.5),
+        (3.0, 20.5),
+        (6.5, 17.0),
+        (10.5, 25.5),
+        (12.0, 25.0),
+        (8.5, 17.0),
+        (13.5, 17.0),
+        (3.0, 3.5),
+    ];
+
+    // Rasterize: for each pixel, check if inside fill (white) or outline (black)
+    for py in 0..h {
+        for px in 0..w {
+            let x = px as f64 + 0.5;
+            let y = py as f64 + 0.5;
+
+            if point_in_polygon(x, y, fill) {
+                img.put_pixel(px, py, Rgba([255, 255, 255, 255]));
+            } else if point_in_polygon(x, y, outline) {
+                img.put_pixel(px, py, Rgba([0, 0, 0, 220]));
+            }
+        }
+    }
+
+    // Simple 1px shadow: shift down-right, draw under existing pixels
+    let mut result = RgbaImage::new(w + 2, h + 2);
+    // Shadow pass (offset by 1,1)
+    for py in 0..h {
+        for px in 0..w {
+            let p = img.get_pixel(px, py);
+            if p.0[3] > 0 {
+                let dp = result.get_pixel(px + 1, py + 1);
+                if dp.0[3] == 0 {
+                    result.put_pixel(px + 1, py + 1, Rgba([0, 0, 0, 80]));
+                }
+            }
+        }
+    }
+    // Foreground pass (at 0,0)
+    for py in 0..h {
+        for px in 0..w {
+            let p = img.get_pixel(px, py);
+            if p.0[3] > 0 {
+                result.put_pixel(px, py, *p);
+            }
+        }
+    }
+
+    result
+}
+
+/// Load a cursor sprite from a PNG file.
+pub fn load_cursor_sprite(path: &str) -> Result<RgbaImage, String> {
+    let img = image::open(path)
+        .map_err(|e| format!("Failed to load cursor image {}: {}", path, e))?;
+    Ok(img.to_rgba8())
+}
+
+/// Point-in-polygon test (ray casting).
+fn point_in_polygon(x: f64, y: f64, polygon: &[(f64, f64)]) -> bool {
+    let n = polygon.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = polygon[i];
+        let (xj, yj) = polygon[j];
+        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Alpha-blend a sprite onto a flat RGBA buffer at the given position, with scale factor.
+/// The sprite's hotspot is at (0, 0) — the tip of the arrow.
+pub fn draw_cursor_on_buffer(
+    buf: &mut [u8],
+    buf_w: usize,
+    buf_h: usize,
+    sprite: &RgbaImage,
+    pos_x: f64,
+    pos_y: f64,
+    scale: f64,
+) {
+    let sw = sprite.width() as f64 * scale;
+    let sh = sprite.height() as f64 * scale;
+    let src_w = sprite.width() as usize;
+    let src_h = sprite.height() as usize;
+
+    let dst_x = pos_x.round() as i64;
+    let dst_y = pos_y.round() as i64;
+
+    for dy in 0..(sh.ceil() as i64) {
+        let py = dst_y + dy;
+        if py < 0 || py >= buf_h as i64 {
+            continue;
+        }
+        // Source row in the sprite
+        let sy = ((dy as f64 / scale) as usize).min(src_h - 1);
+
+        for dx in 0..(sw.ceil() as i64) {
+            let px = dst_x + dx;
+            if px < 0 || px >= buf_w as i64 {
+                continue;
+            }
+            let sx = ((dx as f64 / scale) as usize).min(src_w - 1);
+
+            let src_pixel = sprite.get_pixel(sx as u32, sy as u32);
+            let sa = src_pixel.0[3] as u32;
+            if sa == 0 {
+                continue;
+            }
+
+            let idx = (py as usize * buf_w + px as usize) * 4;
+            let inv_a = 255 - sa;
+            buf[idx] = ((src_pixel.0[0] as u32 * sa + buf[idx] as u32 * inv_a) / 255) as u8;
+            buf[idx + 1] = ((src_pixel.0[1] as u32 * sa + buf[idx + 1] as u32 * inv_a) / 255) as u8;
+            buf[idx + 2] = ((src_pixel.0[2] as u32 * sa + buf[idx + 2] as u32 * inv_a) / 255) as u8;
+            buf[idx + 3] = 255;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +469,75 @@ mod tests {
         // All pixels should be white
         let pixel = mask.get_pixel(0, 0);
         assert_eq!(pixel.0[0], 255, "Zero radius should produce all-white mask");
+    }
+
+    #[test]
+    fn test_cursor_sprite_dimensions() {
+        let sprite = generate_cursor_sprite();
+        assert_eq!(sprite.width(), 26); // 24 + 2 for shadow
+        assert_eq!(sprite.height(), 38); // 36 + 2 for shadow
+    }
+
+    #[test]
+    fn test_cursor_sprite_has_opaque_pixels() {
+        let sprite = generate_cursor_sprite();
+        let opaque_count = sprite.pixels().filter(|p| p.0[3] > 0).count();
+        assert!(opaque_count > 50, "Cursor should have visible pixels, got {}", opaque_count);
+    }
+
+    #[test]
+    fn test_cursor_sprite_tip_opaque() {
+        let sprite = generate_cursor_sprite();
+        // The arrow tip is at approximately (1, 0) in the original, which is (1, 0) in result
+        let tip = sprite.get_pixel(1, 1);
+        assert!(tip.0[3] > 0, "Arrow tip should be opaque, got alpha={}", tip.0[3]);
+    }
+
+    #[test]
+    fn test_draw_cursor_on_buffer() {
+        let sprite = generate_cursor_sprite();
+        let mut buf = vec![0u8; 100 * 100 * 4];
+        draw_cursor_on_buffer(&mut buf, 100, 100, &sprite, 50.0, 50.0, 1.0);
+        // Check that some pixels in the cursor region have been drawn
+        let mut found = false;
+        for dy in 0..sprite.height() {
+            for dx in 0..sprite.width() {
+                let px = 50 + dx as usize;
+                let py = 50 + dy as usize;
+                if px < 100 && py < 100 {
+                    let idx = (py * 100 + px) * 4;
+                    if buf[idx + 3] > 0 {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if found { break; }
+        }
+        assert!(found, "Buffer should have cursor pixels drawn");
+    }
+
+    #[test]
+    fn test_draw_cursor_scaled() {
+        let sprite = generate_cursor_sprite();
+        let mut buf = vec![0u8; 200 * 200 * 4];
+        draw_cursor_on_buffer(&mut buf, 200, 200, &sprite, 50.0, 50.0, 1.3);
+        // Should not panic with scale > 1
+    }
+
+    #[test]
+    fn test_draw_cursor_at_edge() {
+        let sprite = generate_cursor_sprite();
+        let mut buf = vec![0u8; 50 * 50 * 4];
+        // Draw at edge — should clip, not panic
+        draw_cursor_on_buffer(&mut buf, 50, 50, &sprite, 45.0, 45.0, 1.0);
+        draw_cursor_on_buffer(&mut buf, 50, 50, &sprite, -5.0, -5.0, 1.0);
+    }
+
+    #[test]
+    fn test_point_in_polygon() {
+        let triangle = &[(0.0, 0.0), (10.0, 0.0), (5.0, 10.0), (0.0, 0.0)];
+        assert!(point_in_polygon(5.0, 3.0, triangle));
+        assert!(!point_in_polygon(20.0, 20.0, triangle));
     }
 }
