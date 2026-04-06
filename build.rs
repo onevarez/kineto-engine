@@ -37,11 +37,17 @@ fn main() {
     println!("cargo:rustc-link-lib=static=x265");
 
     // C++ runtime (x265 dependency)
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_os  = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     match target_os.as_str() {
-        "macos" => println!("cargo:rustc-link-lib=c++"),
-        "linux" => println!("cargo:rustc-link-lib=stdc++"),
-        "windows" => {} // MSVC links C++ runtime automatically
+        "macos"   => println!("cargo:rustc-link-lib=c++"),
+        "linux"   => println!("cargo:rustc-link-lib=stdc++"),
+        "windows" => {
+            if target_env == "gnu" {
+                println!("cargo:rustc-link-lib=stdc++");
+            }
+            // msvc: C++ runtime linked automatically
+        }
         _ => println!("cargo:rustc-link-lib=stdc++"),
     }
 

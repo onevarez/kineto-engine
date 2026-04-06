@@ -19,6 +19,12 @@ curl -sL https://github.com/onevarez/kineto-engine/releases/latest/download/kine
 curl -sL https://github.com/onevarez/kineto-engine/releases/latest/download/kineto-linux-x64.tar.gz | tar -xz
 ```
 
+```powershell
+# Windows (x64) — PowerShell
+Invoke-WebRequest -Uri https://github.com/onevarez/kineto-engine/releases/latest/download/kineto-windows-x64.zip -OutFile kineto-windows-x64.zip
+Expand-Archive kineto-windows-x64.zip -DestinationPath .
+```
+
 Or build from source:
 
 ```bash
@@ -147,6 +153,7 @@ The shadow is rendered at 1/4 resolution, blurred, and upscaled — fast even fo
 | macOS arm64 | `kineto-darwin-arm64.tar.gz` | Supported |
 | macOS x64 | `kineto-darwin-x64.tar.gz` | Supported |
 | Linux x64 | `kineto-linux-x64.tar.gz` | Supported |
+| Windows x64 | `kineto-windows-x64.zip` | Supported |
 
 ## License
 
