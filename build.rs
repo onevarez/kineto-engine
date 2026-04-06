@@ -104,6 +104,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-lx265");
         println!("cargo:rustc-link-arg=-lstdc++");
         println!("cargo:rustc-link-arg=-lgcc");
+        println!("cargo:rustc-link-arg=-lwinpthread");
         println!("cargo:rustc-link-arg=-lmingwex");
         println!("cargo:rustc-link-arg=-lz");
         println!("cargo:rustc-link-arg=-Wl,-Bdynamic");

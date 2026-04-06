@@ -36,6 +36,7 @@ jobs:
           mkdir -p "$PREFIX"
           git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264-src
           cd /tmp/x264-src
+          CC=x86_64-w64-mingw32-gcc-posix \
           ./configure \
             --host=x86_64-w64-mingw32 \
             --cross-prefix=x86_64-w64-mingw32- \
@@ -51,8 +52,8 @@ jobs:
             -G Ninja \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
             -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
-            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
             -DENABLE_SHARED=OFF \
             -DENABLE_CLI=OFF
           ninja && ninja install
@@ -74,6 +75,8 @@ jobs:
             --arch=x86_64 \
             --target-os=mingw32 \
             --pkg-config=pkg-config \
+            --cc=x86_64-w64-mingw32-gcc-posix \
+            --cxx=x86_64-w64-mingw32-g++-posix \
             --pkg-config-flags="--static" \
             --enable-static --disable-shared \
             --disable-autodetect --disable-programs --disable-doc --disable-network \
@@ -101,7 +104,7 @@ jobs:
           echo "FFMPEG_DEPS_DIR=$HOME/ffmpeg-prefix"                    >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$HOME/ffmpeg-prefix/lib/pkgconfig"      >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_CROSS=1"                               >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc-posix" >> "$GITHUB_ENV"
 
       - name: Build
         run: cargo build --release --target x86_64-pc-windows-gnu
