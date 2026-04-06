@@ -2,6 +2,7 @@ mod assets;
 mod compose;
 mod cursor;
 mod motion_blur;
+mod yuv;
 mod zoom;
 
 use clap::{Parser, Subcommand};
