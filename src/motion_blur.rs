@@ -50,10 +50,13 @@ pub fn compute_blur_radius(speed: f64, slider: f64) -> f64 {
 }
 
 /// Apply directional box blur along the motion vector.
-/// `buf` is the RGBA buffer (modified in place), `scratch` is a pre-allocated temp buffer.
+///
+/// Reads from `src` and writes the blurred result to `dst` — they must be
+/// separate buffers of equal size (`width * height * 4` bytes, packed RGBA,
+/// no stride padding).  No intermediate allocation is performed.
 pub fn apply(
-    buf: &mut [u8],
-    scratch: &mut [u8],
+    src: &[u8],
+    dst: &mut [u8],
     width: u32,
     height: u32,
     vx: f64,
@@ -67,14 +70,8 @@ pub fn apply(
     let w = width as usize;
     let h = height as usize;
 
-    // Adaptive kernel size based on blur_px
-    let taps: usize = if blur_px < 4.0 {
-        7
-    } else if blur_px < 8.0 {
-        11
-    } else {
-        15
-    };
+    // Adaptive kernel size based on blur radius
+    let taps: usize = if blur_px < 4.0 { 7 } else if blur_px < 8.0 { 11 } else { 15 };
 
     // Normalize direction vector
     let speed = (vx * vx + vy * vy).sqrt();
@@ -84,40 +81,46 @@ pub fn apply(
     let dir_x = vx / speed;
     let dir_y = vy / speed;
 
-    // Step size along the direction
     let step = blur_px / taps as f64;
     let half_taps = taps as f64 / 2.0;
-    let inv_taps = 1.0 / taps as f64;
+    let half_taps_u32 = (taps / 2) as u32;
+    let taps_u32 = taps as u32;
 
-    scratch[..w * h * 4].copy_from_slice(&buf[..w * h * 4]);
+    // Precompute integer (dx, dy) per tap — identical for every pixel.
+    // This removes `taps` float multiplications + round() calls from the hot loop.
+    let tap_deltas: Vec<(i32, i32)> = (0..taps)
+        .map(|t| {
+            let offset = (t as f64 - half_taps) * step;
+            (
+                (dir_x * offset).round() as i32,
+                (dir_y * offset).round() as i32,
+            )
+        })
+        .collect();
 
     for y in 0..h {
         for x in 0..w {
-            let mut r_sum: f64 = 0.0;
-            let mut g_sum: f64 = 0.0;
-            let mut b_sum: f64 = 0.0;
-            let mut a_sum: f64 = 0.0;
+            let mut r: u32 = 0;
+            let mut g: u32 = 0;
+            let mut b: u32 = 0;
+            let mut a: u32 = 0;
 
-            for tap in 0..taps {
-                let offset = (tap as f64 - half_taps) * step;
-                let sx = (x as f64 + dir_x * offset).round() as i64;
-                let sy = (y as f64 + dir_y * offset).round() as i64;
-
-                let sx = sx.clamp(0, w as i64 - 1) as usize;
-                let sy = sy.clamp(0, h as i64 - 1) as usize;
-
+            for &(tdx, tdy) in &tap_deltas {
+                let sx = (x as i32 + tdx).clamp(0, w as i32 - 1) as usize;
+                let sy = (y as i32 + tdy).clamp(0, h as i32 - 1) as usize;
                 let idx = (sy * w + sx) * 4;
-                r_sum += scratch[idx] as f64;
-                g_sum += scratch[idx + 1] as f64;
-                b_sum += scratch[idx + 2] as f64;
-                a_sum += scratch[idx + 3] as f64;
+                r += src[idx]     as u32;
+                g += src[idx + 1] as u32;
+                b += src[idx + 2] as u32;
+                a += src[idx + 3] as u32;
             }
 
+            // Rounding integer division: (sum + taps/2) / taps
             let idx = (y * w + x) * 4;
-            buf[idx] = (r_sum * inv_taps).round() as u8;
-            buf[idx + 1] = (g_sum * inv_taps).round() as u8;
-            buf[idx + 2] = (b_sum * inv_taps).round() as u8;
-            buf[idx + 3] = (a_sum * inv_taps).round() as u8;
+            dst[idx]     = ((r + half_taps_u32) / taps_u32) as u8;
+            dst[idx + 1] = ((g + half_taps_u32) / taps_u32) as u8;
+            dst[idx + 2] = ((b + half_taps_u32) / taps_u32) as u8;
+            dst[idx + 3] = ((a + half_taps_u32) / taps_u32) as u8;
         }
     }
 }
@@ -167,9 +170,20 @@ mod tests {
 
     #[test]
     fn test_apply_no_crash() {
-        let mut buf = vec![128u8; 16 * 16 * 4];
-        let mut scratch = vec![0u8; 16 * 16 * 4];
-        apply(&mut buf, &mut scratch, 16, 16, 100.0, 0.0, 5.0);
-        // Should not crash, and buffer should be modified
+        let src = vec![128u8; 16 * 16 * 4];
+        let mut dst = vec![0u8; 16 * 16 * 4];
+        apply(&src, &mut dst, 16, 16, 100.0, 0.0, 5.0);
+        // Output should be non-zero and within u8 range
+        assert!(dst.iter().any(|&v| v > 0));
+    }
+
+    #[test]
+    fn test_apply_separate_buffers() {
+        // Verify src is not modified and dst receives blurred output
+        let src = vec![200u8; 32 * 32 * 4];
+        let mut dst = vec![0u8; 32 * 32 * 4];
+        apply(&src, &mut dst, 32, 32, 50.0, 30.0, 6.0);
+        assert!(src.iter().all(|&v| v == 200), "src must not be modified");
+        assert!(dst.iter().any(|&v| v > 0), "dst must be written");
     }
 }
