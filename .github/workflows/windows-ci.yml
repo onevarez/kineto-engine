@@ -10,7 +10,7 @@ env:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -18,33 +18,56 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
 
-      - name: Set up MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: false
-          path-type: inherit
-          install: >-
-            git
-            make
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-nasm
-            mingw-w64-ucrt-x86_64-x264
-            mingw-w64-ucrt-x86_64-x265
-            mingw-w64-ucrt-x86_64-zlib
-            mingw-w64-ucrt-x86_64-pkgconf
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-mingw-w64-x86-64 \
+            nasm \
+            cmake \
+            ninja-build \
+            pkg-config
+
+      - name: Build static x264
+        run: |
+          PREFIX="$HOME/ffmpeg-prefix"
+          mkdir -p "$PREFIX"
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git /tmp/x264-src
+          cd /tmp/x264-src
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --prefix="$PREFIX" \
+            --enable-static --disable-shared --disable-cli
+          make -j$(nproc) && make install
+
+      - name: Build static x265
+        run: |
+          PREFIX="$HOME/ffmpeg-prefix"
+          git clone --depth 1 -b 4.1 https://bitbucket.org/multicoreware/x265_git.git /tmp/x265-src
+          cmake /tmp/x265-src/source \
+            -G Ninja \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF
+          ninja && ninja install
 
       - name: Build FFmpeg
-        shell: msys2 {0}
         run: |
-          PREFIX="/c/ffmpeg-prefix"
-          mkdir -p "$PREFIX/lib" "$PREFIX/include"
+          PREFIX="$HOME/ffmpeg-prefix"
           git clone --depth 1 --branch n${{ env.FFMPEG_VERSION }} \
             https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg-src
           cd /tmp/ffmpeg-src
-          PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig" \
+          PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
           ./configure \
             --prefix="$PREFIX" \
+            --enable-cross-compile \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --arch=x86_64 \
+            --target-os=mingw32 \
             --enable-static --disable-shared \
             --disable-autodetect --disable-programs --disable-doc --disable-network \
             --disable-everything \
@@ -61,25 +84,18 @@ jobs:
             --enable-protocol=file,pipe \
             --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc \
             --enable-small \
-            --extra-cflags="-I$PREFIX/include -I/ucrt64/include -Wno-error=incompatible-pointer-types" \
-            --extra-ldflags="-L$PREFIX/lib -L/ucrt64/lib" \
-            --target-os=mingw32 --arch=x86_64 --disable-pthreads --enable-w32threads
+            --extra-cflags="-I$PREFIX/include" \
+            --extra-ldflags="-L$PREFIX/lib"
           make -j$(nproc)
           make install
-          cp /ucrt64/lib/libx264.a "$PREFIX/lib/"
-          cp /ucrt64/lib/libx265.a "$PREFIX/lib/"
-          cp /ucrt64/lib/libz.a    "$PREFIX/lib/" 2>/dev/null || true
 
-      - name: Set FFmpeg env vars
-        shell: bash
+      - name: Set env vars
         run: |
-          echo "FFMPEG_DIR=C:/ffmpeg-prefix"                    >> "$GITHUB_ENV"
-          echo "FFMPEG_DEPS_DIR=C:/ffmpeg-prefix"               >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=C:/ffmpeg-prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_ALLOW_CROSS=1"                       >> "$GITHUB_ENV"
+          echo "FFMPEG_DIR=$HOME/ffmpeg-prefix"                         >> "$GITHUB_ENV"
+          echo "FFMPEG_DEPS_DIR=$HOME/ffmpeg-prefix"                    >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/ffmpeg-prefix/lib/pkgconfig"      >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_CROSS=1"                               >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
 
       - name: Build
-        shell: msys2 {0}
-        run: |
-          export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=gcc
-          cargo build --release --target x86_64-pc-windows-gnu
+        run: cargo build --release --target x86_64-pc-windows-gnu
