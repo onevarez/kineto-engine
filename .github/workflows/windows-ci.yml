@@ -55,6 +55,8 @@ jobs:
             -DENABLE_SHARED=OFF \
             -DENABLE_CLI=OFF
           ninja && ninja install
+          # Patch x265.pc to include C++ runtime (per rdp/ffmpeg-windows-build-helpers)
+          sed -i 's/-lx265/-lx265 -lstdc++/' "$PREFIX/lib/pkgconfig/x265.pc"
 
       - name: Build FFmpeg
         run: |
@@ -70,10 +72,11 @@ jobs:
             --cross-prefix=x86_64-w64-mingw32- \
             --arch=x86_64 \
             --target-os=mingw32 \
+            --pkg-config=pkg-config \
+            --pkg-config-flags="--static" \
             --enable-static --disable-shared \
             --disable-autodetect --disable-programs --disable-doc --disable-network \
             --disable-everything \
-            --pkg-config-flags="--static" \
             --enable-avcodec --enable-avformat --enable-avfilter \
             --enable-swscale --enable-swresample \
             --enable-gpl --enable-zlib --enable-libx264 --enable-libx265 \
