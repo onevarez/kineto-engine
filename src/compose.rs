@@ -38,7 +38,7 @@ unsafe impl Send for SendScaler {}
 struct SendOutput(ffmpeg::format::context::Output);
 unsafe impl Send for SendOutput {}
 
-struct SendEncoder(ffmpeg::codec::encoder::video::Video);
+struct SendEncoder(ffmpeg::encoder::Video);
 unsafe impl Send for SendEncoder {}
 
 struct SendPacket(ffmpeg::Packet);
