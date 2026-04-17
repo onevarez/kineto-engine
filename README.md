@@ -4,6 +4,13 @@ Cinematic video composition from the command line. Takes a screen recording and 
 
 Built on statically linked FFmpeg (libav*). Decodes H.264/VP8/HEVC, composites in RGBA, encodes to H.264 or HEVC via libx264/libx265. Runs on macOS, Linux, and Windows — no runtime dependencies on any platform.
 
+
+
+https://github.com/user-attachments/assets/d7c97940-3e4b-4528-b356-e7d09cd3964b
+
+
+
+
 ## Install
 
 Download from [Releases](https://github.com/onevarez/kineto-engine/releases):
